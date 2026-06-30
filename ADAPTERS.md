@@ -1,5 +1,9 @@
 # ADAPTERS
 
+<p align="center">
+  <img src="assets/banner-adapters-oracle.png" alt="token-oracle — adapters: plug external code into the forecast engine" width="900">
+</p>
+
 Two adapter interfaces let external code plug into token-oracle:
 
 - **Source adapter** — feeds raw usage events into the forecast engine.
