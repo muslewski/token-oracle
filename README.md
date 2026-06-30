@@ -1,94 +1,93 @@
-# 🔮 token-oracle
+<h1 align="center">🔮 token-oracle</h1>
 
-[![PyPI version](https://img.shields.io/pypi/v/token-oracle)](https://pypi.org/project/token-oracle/)
-[![CI](https://img.shields.io/github/actions/workflow/status/muslewski/token-oracle/ci.yml?label=CI)](https://github.com/muslewski/token-oracle/actions/workflows/ci.yml)
-[![Python versions](https://img.shields.io/pypi/pyversions/token-oracle)](https://pypi.org/project/token-oracle/)
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+<p align="center">Provider-agnostic token usage-cap forecaster — know when you'll hit your limit before you hit it.</p>
 
-**O**bserved-**R**ate **A**llowance **&** **C**ap-**L**imit **E**stimator — a
-provider-agnostic engine that forecasts **when you'll hit a usage cap before its
-reset**, learned from your own observed burn patterns. Companion to
-[agentic-sage](https://github.com/muslewski/agentic-sage).
+<p align="center">
+  <a href="https://pypi.org/project/token-oracle/"><img src="https://img.shields.io/pypi/v/token-oracle?label=PyPI" alt="PyPI version"></a>
+  <a href="https://github.com/muslewski/token-oracle/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/muslewski/token-oracle/ci.yml?label=CI" alt="CI"></a>
+  <a href="https://pypi.org/project/token-oracle/"><img src="https://img.shields.io/pypi/pyversions/token-oracle" alt="Python versions"></a>
+  <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
+</p>
 
-> The engine is the product. UIs — statusline, tmux, dashboard — are optional
-> consumers of a neutral `Forecast`. Zero dependencies, stdlib only, Python 3.10+.
+---
+
+## Install
+
+```bash
+pipx install token-oracle   # recommended — isolated environment
+pip install token-oracle    # fallback
+uvx token-oracle            # uv users
+```
 
 ## Quickstart
 
 ```bash
-pipx install token-oracle        # or: pip install token-oracle
-token-oracle doctor              # config + source + windows, with ✓/✗ checks
-token-oracle forecast            # human status line
-token-oracle forecast --json     # the snapshot schema
-token-oracle dash                # live colored TUI
+token-oracle              # live forecast bar — time left before your cap
+token-oracle dashboard    # full-screen TUI dashboard
+token-oracle doctor       # check configuration + data sources
 ```
 
-Works out of the box with Claude Code (`claude_code` source, selected by default).
-Other providers feed in via the `generic` source or a custom adapter.
+Run `token-oracle --help` for all options.
 
 ## How it works
 
-token-oracle builds a **burn profile** from your recent usage history — observed
-token consumption bucketed into sliding windows. Each window is compared against
-the provider cap it belongs to, and the engine extrapolates forward to estimate
-projected usage at reset time.
+token-oracle reads your provider's local usage logs, computes an observed token-consumption rate over a configurable sliding window, and estimates how long you have before you exhaust your current allowance or hit your plan cap. No provider API calls — purely offline inference from log files already on your machine.
 
-The output is a provider-agnostic `Forecast` object:
+Supported sources:
 
-1. **Source adapter** — reads usage logs (e.g. Claude Code's `~/.claude/projects/*/*.jsonl`) and emits `(timestamp, tokens)` pairs.
-2. **Burn profiler** — aggregates observed pairs into per-window burn rates.
-3. **Window resolver** — maps each window to its cap and reset time from your config.
-4. **Forecast engine** — projects forward, computes `projected / cap` ratio, and derives a severity gauge (`ok → warning → critical → over`).
-5. **Consumer** — CLI (`forecast`, `dash`, `statusline`, `tmux`) or any external tool reading `forecast.json`.
+| Source | Log location |
+|--------|-------------|
+| Claude Code | `~/.claude/usage/` (JSONL) |
+| Generic (stdin) | pipe any JSON usage stream |
 
 ## Parts & options
 
-| Part | What it does | Need it? |
-|---|---|---|
-| core engine | forecast math (burn profile + window math) | required |
-| `claude_code` source | reads `~/.claude/projects/*/*.jsonl` | default source |
-| `generic` source | feed your own `[[ts, tokens]]` JSON file | optional |
-| `token-oracle` CLI | `forecast` / `snapshot` / `doctor` / statusline / tmux | required |
-| TUI dashboard (`token-oracle dash`) | live colored forecast view, refreshes ~2 s | optional |
-| statusline adapter | ANSI status-line reference renderer | optional |
-| tmux adapter | tmux-formatted line reference renderer | optional |
-| snapshot (`forecast.json`) | stable JSON contract for external consumers | optional |
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--source` | auto-detect | `claude-code` or `generic` |
+| `--window` | `5h` | sliding-window size for rate estimation |
+| `--cap` | from config | token cap to forecast against |
+| `--config` | `~/.config/token-oracle/config.toml` | config file path |
+| `--format` | `bar` | output format: `bar`, `json`, `tmux`, `statusline` |
 
-See [SETUP.md](SETUP.md) for full configuration reference.
-See [ADAPTERS.md](ADAPTERS.md) for the source and consumer interfaces.
-See [AGENTS.md](AGENTS.md) for a deterministic coding-agent runbook.
+Full reference: `token-oracle --help`
 
 ## CLI reference
 
-| Command | Description |
-|---|---|
-| `token-oracle forecast` | Human status line |
-| `token-oracle forecast --json` | Print the full snapshot JSON |
-| `token-oracle snapshot [--out PATH]` | Write `forecast.json`, print path |
-| `token-oracle statusline` | ANSI status line (reference adapter) |
-| `token-oracle tmux` | tmux-formatted line (reference adapter) |
-| `token-oracle doctor` | Config, source, cache, windows — with ✓/✗ checks |
-| `token-oracle dash` | Live colored TUI dashboard (refreshes ~2 s) |
+```
+token-oracle [OPTIONS]
+token-oracle dashboard [OPTIONS]
+token-oracle doctor
+token-oracle snapshot
+```
 
-Every subcommand accepts `--config PATH` to override the default config location.
+## Adapters
+
+Output adapters let token-oracle feed your status bar or terminal multiplexer:
+
+- **tmux** — writes a tmux-formatted `status-right` fragment
+- **statusline** — writes a plain-text/ANSI fragment for any status line
+
+See [ADAPTERS.md](ADAPTERS.md) for setup and configuration.
 
 ## Colors
 
-Output is colored by **severity** (the gauge gradient: green → lime → orange → red
-as projected usage rises) with a violet accent for headers. Color is applied only at
-output, so piped output stays clean.
+The forecast bar uses colour thresholds to signal urgency:
 
-- `NO_COLOR=1` disables color everywhere.
-- `FORCE_COLOR=1` forces color on non-TTY interactive output.
+| Colour | Meaning |
+|--------|---------|
+| 🟢 Green | > 40 % remaining |
+| 🟡 Yellow | 15 – 40 % remaining |
+| 🔴 Red | < 15 % remaining |
 
 ## Works with agentic-sage
 
-Oracle writes a stable `forecast.json`; [agentic-sage](https://github.com/muslewski/agentic-sage)
-can optionally surface it via its `tokenForecastPath` config key. Each tool works
-fully standalone — token prediction is an *optional* input to session awareness.
-See [SETUP.md § Optional integrations](SETUP.md#optional-integrations) for the
-one-line wiring step.
+[agentic-sage](https://github.com/muslewski/agentic-sage) is a companion JS tool for managing Claude Code skill definitions. token-oracle is provider-agnostic and complements it by surfacing usage-cap forecasts independently of any AI framework.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). In brief: fork → branch from `main` → `pytest` + `ruff check` + `mypy` → pull request.
 
 ## License
 
-MIT — Copyright (c) Mateusz Muślewski.
+MIT — Copyright (c) 2026 Mateusz Muślewski.
