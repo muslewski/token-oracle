@@ -1,9 +1,21 @@
+# Publish to PyPI.
+#
+# Trigger model:
+#   - release-please opens the release PR, updates CHANGELOG, and pushes a "v*" tag when the PR
+#     merges. HOWEVER, a tag pushed by release-please's default GITHUB_TOKEN will NOT trigger
+#     this workflow (GitHub blocks same-actor re-triggering to prevent loops).
+#   - To publish after release-please merges: a human pushes the tag manually
+#     (`git pull --tags && git push origin vX.Y.Z`) which triggers the push:tags path below, OR
+#     runs this workflow via the Actions UI (workflow_dispatch).
+#   - For fully automated publishing without the manual push, configure release-please with a
+#     PAT or a GitHub App token that has sufficient permissions to trigger downstream workflows.
 name: Publish to PyPI
 
 on:
   push:
     tags:
       - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read

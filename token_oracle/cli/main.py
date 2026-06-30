@@ -41,7 +41,7 @@ def _doctor_lines(cfg, config_path, color):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="oracle")
+    parser = argparse.ArgumentParser(prog="token-oracle")
     sub = parser.add_subparsers(dest="cmd", required=True)
     for name in ("forecast", "snapshot", "statusline", "tmux", "doctor", "dash"):
         sp = sub.add_parser(name)

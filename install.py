@@ -21,7 +21,7 @@ def write_default_config(path=None, preset="max20", force=False) -> str:
 def main():
     path = write_default_config()
     print(f"config: {path}")
-    print("next: `oracle doctor` then `oracle forecast`")
+    print("next: `token-oracle doctor` then `token-oracle forecast`")
     return 0
 
 

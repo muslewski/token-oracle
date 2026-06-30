@@ -22,12 +22,12 @@ uvx token-oracle            # uv users
 ## Quickstart
 
 ```bash
-token-oracle              # live forecast bar — time left before your cap
-token-oracle dashboard    # full-screen TUI dashboard
+token-oracle forecast     # live forecast — time left before your cap
+token-oracle dash         # full-screen TUI dashboard
 token-oracle doctor       # check configuration + data sources
 ```
 
-Run `token-oracle --help` for all options.
+Run `token-oracle --help` to list all subcommands.
 
 ## How it works
 
@@ -37,28 +37,35 @@ Supported sources:
 
 | Source | Log location |
 |--------|-------------|
-| Claude Code | `~/.claude/usage/` (JSONL) |
+| Claude Code | `~/.claude/projects/*/*.jsonl` |
 | Generic (stdin) | pipe any JSON usage stream |
 
 ## Parts & options
 
-| Flag | Default | Description |
-|------|---------|-------------|
-| `--source` | auto-detect | `claude-code` or `generic` |
-| `--window` | `5h` | sliding-window size for rate estimation |
-| `--cap` | from config | token cap to forecast against |
-| `--config` | `~/.config/token-oracle/config.toml` | config file path |
-| `--format` | `bar` | output format: `bar`, `json`, `tmux`, `statusline` |
+All subcommands accept `--config FILE` (default: `~/.config/token-oracle/config.toml`).
 
-Full reference: `token-oracle --help`
+| Subcommand | Extra flags | Description |
+|------------|-------------|-------------|
+| `forecast` | `--json` | Print forecast (default: statusline format) |
+| `snapshot` | `--out FILE` | Write snapshot JSON to a file, print the path |
+| `statusline` | — | Emit plain-text/ANSI statusline fragment |
+| `tmux` | — | Emit tmux `status-right` fragment |
+| `doctor` | — | Check configuration and data sources |
+| `dash` | — | Launch full-screen TUI dashboard |
+
+Full reference: `token-oracle <subcommand> --help`
 
 ## CLI reference
 
 ```
-token-oracle [OPTIONS]
-token-oracle dashboard [OPTIONS]
-token-oracle doctor
-token-oracle snapshot
+token-oracle {forecast,snapshot,statusline,tmux,doctor,dash} [OPTIONS]
+
+token-oracle forecast   [--config FILE] [--json]
+token-oracle snapshot   [--config FILE] [--out FILE]
+token-oracle statusline [--config FILE]
+token-oracle tmux       [--config FILE]
+token-oracle doctor     [--config FILE]
+token-oracle dash       [--config FILE]
 ```
 
 ## Adapters
