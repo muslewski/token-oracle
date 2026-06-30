@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "token-oracle"
+version = "0.1.0"
+description = "Observed-Rate Allowance & Cap-Limit Estimator — provider-agnostic token usage-cap forecaster"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Kento" }]
+keywords = ["claude", "tokens", "usage", "forecast", "rate-limit"]
+
+[project.optional-dependencies]
+dev = ["pytest>=7"]
+
+[project.scripts]
+oracle = "oracle.cli.main:main"
+
+[tool.setuptools]
+packages = ["oracle", "oracle.core", "oracle.sources", "oracle.snapshot", "oracle.adapters", "oracle.cli", "oracle.dashboard"]
