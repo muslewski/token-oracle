@@ -1,10 +1,9 @@
 import token_oracle.cli.colors as colors
-from token_oracle.core.contracts import Forecast
 from token_oracle.adapters import statusline, tmux
+from token_oracle.core.contracts import Forecast
 
 F_OK = Forecast("5h", 12000, 220000, 42.0, None, 3 * 3600 + 46 * 60, False)
-F_HOT = Forecast("weekly", 5_000_000, 8_000_000, 130.0, 90000.0,
-                 5 * 86400 + 18 * 3600, False)
+F_HOT = Forecast("weekly", 5_000_000, 8_000_000, 130.0, 90000.0, 5 * 86400 + 18 * 3600, False)
 
 
 def test_statusline_contains_numbers():

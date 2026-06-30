@@ -1,7 +1,7 @@
 """Source adapter registry. A source turns provider data into neutral
 (timestamp, tokens) events, owning its own incremental file/cache state."""
 
-_REGISTRY = {}
+_REGISTRY: dict[str, type] = {}
 
 
 def register(name):

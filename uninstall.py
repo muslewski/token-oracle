@@ -1,9 +1,10 @@
 """Reversible uninstall: remove oracle's config/cache/snapshot. The pip package
 is removed separately via `pip uninstall token-oracle`."""
+
 import os
 import sys
 
-from token_oracle.core.config import default_config_path, default_cache_path
+from token_oracle.core.config import default_cache_path, default_config_path
 from token_oracle.snapshot.writer import default_snapshot_path
 
 

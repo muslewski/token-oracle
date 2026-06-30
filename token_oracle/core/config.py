@@ -4,6 +4,7 @@ Claude's max20 caps ship as one preset, not as core law."""
 import json
 import os
 from dataclasses import dataclass, field
+from typing import Any
 
 from .contracts import Window
 from .timeutil import parse_ts
@@ -51,7 +52,7 @@ def _window_from_dict(d) -> Window:
 
 def load_config(path: str | None = None) -> "Config":
     path = path or default_config_path()
-    raw = dict(PRESETS["max20"])
+    raw: dict[str, Any] = dict(PRESETS["max20"])
     try:
         with open(os.path.expanduser(path), encoding="utf-8") as fh:
             data = json.load(fh)

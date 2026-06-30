@@ -1,9 +1,10 @@
 """Reversible installer: write a starter config from a preset (non-clobbering)."""
+
 import json
 import os
 import sys
 
-from token_oracle.core.config import default_config_path, PRESETS
+from token_oracle.core.config import PRESETS, default_config_path
 
 
 def write_default_config(path=None, preset="max20", force=False) -> str:
