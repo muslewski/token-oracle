@@ -7,7 +7,7 @@ from oracle.core.config import default_config_path, default_cache_path
 from oracle.snapshot.writer import default_snapshot_path
 
 
-def remove_config(path=None):
+def remove_config(path=None) -> bool:
     path = os.path.expanduser(path or default_config_path())
     try:
         os.remove(path)
@@ -16,7 +16,7 @@ def remove_config(path=None):
         return False
 
 
-def remove_cache_and_snapshot():
+def remove_cache_and_snapshot() -> None:
     for p in (default_cache_path(), default_snapshot_path()):
         try:
             os.remove(os.path.expanduser(p))

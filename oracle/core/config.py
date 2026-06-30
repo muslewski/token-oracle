@@ -23,7 +23,7 @@ class Config:
     source: str = "claude_code"
     source_opts: dict = field(default_factory=dict)
     cache_path: str = ""
-    windows: list = field(default_factory=list)
+    windows: list[Window] = field(default_factory=list)
 
 
 def _xdg(env, default_tail):
@@ -41,7 +41,7 @@ def default_cache_path():
                         "token-oracle", "cache.json")
 
 
-def _window_from_dict(d):
+def _window_from_dict(d) -> Window:
     anchor = d.get("anchor")
     if isinstance(anchor, str):
         anchor = parse_ts(anchor)
@@ -49,7 +49,7 @@ def _window_from_dict(d):
                   period_secs=int(d["period_secs"]), anchor=anchor)
 
 
-def load_config(path=None):
+def load_config(path: str | None = None) -> "Config":
     path = path or default_config_path()
     raw = dict(PRESETS["max20"])
     try:

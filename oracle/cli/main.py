@@ -12,7 +12,7 @@ from ..sources.base import available
 
 def _add_common(p):
     p.add_argument("--config", default=None)
-    p.add_argument("--now", type=float, default=None)
+    p.add_argument("--now", type=float, default=None, help=argparse.SUPPRESS)
 
 
 def _now(args):

@@ -6,7 +6,7 @@ import sys
 from oracle.core.config import default_config_path, PRESETS
 
 
-def write_default_config(path=None, preset="max20", force=False):
+def write_default_config(path=None, preset="max20", force=False) -> str:
     path = os.path.expanduser(path or default_config_path())
     if os.path.exists(path) and not force:
         return path

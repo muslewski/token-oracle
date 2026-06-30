@@ -26,7 +26,7 @@ python -m pytest -q
 Expected output (last line):
 
 ```
-51 passed in 0.XXs
+54 passed in 0.XXs
 ```
 
 If any tests fail, stop and report the failure. Do not proceed with further
@@ -167,7 +167,7 @@ forecast file fresh.
 ## Verification checklist
 
 - [ ] `pip install -e ".[dev]"` exits 0
-- [ ] `python -m pytest -q` reports `51 passed`
+- [ ] `python -m pytest -q` reports `54 passed`
 - [ ] `oracle doctor` shows `source: claude_code` and `windows: 2`
 - [ ] `oracle forecast` returns a line or `idle` (no stack trace)
 - [ ] `oracle forecast --json` returns valid JSON with `"schema": 1`

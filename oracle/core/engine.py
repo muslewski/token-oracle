@@ -16,11 +16,12 @@ def forecast(now, config=None):
         if now - cache.get("lastAggregate", 0) >= AGGREGATE_INTERVAL:
             files, events = source.scan(cache.get("files", {}), now, HIST_SECS)
             cache["files"] = files
+            cache["events"] = [[float(ts), int(tok)] for ts, tok in events]
             cache["lastAggregate"] = now
             cache["profile"] = build_profile(events, now)
             save_cache(cache, cfg.cache_path)
         else:
-            events = events_from_cache(cache, now, HIST_SECS)
+            events = [(float(ts), int(tok)) for ts, tok in cache.get("events", [])]
         profile = cache.get("profile") or None
         return [compute_window(events, now, w, profile) for w in cfg.windows]
     except Exception:

@@ -46,7 +46,7 @@ set -g status-right '#(oracle tmux)'
 git clone <repo>
 cd token-oracle
 pip install -e ".[dev]"
-python -m pytest -q              # 51 tests, all green
+python -m pytest -q              # 54 tests, all green
 ```
 
 ### Tier 5 — library use (no CLI)

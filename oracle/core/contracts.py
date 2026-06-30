@@ -38,6 +38,6 @@ class Forecast:
     confidence: float = 1.0
 
 
-def to_pairs(events):
+def to_pairs(events: list["UsageEvent"]) -> list[tuple[float, int]]:
     """Sorted (timestamp, tokens) pairs the math operates on."""
     return sorted((float(e.timestamp), int(e.tokens)) for e in events)

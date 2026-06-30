@@ -28,3 +28,20 @@ def test_source_scan_collects_within_window(tmp_path):
     files, events = src.scan({}, now=7200.0, window=7200.0)
     assert events == [(3600.0, 100)]
     assert any("a.jsonl" in k for k in files)
+
+def test_source_scan_excludes_future_events(tmp_path):
+    proj = tmp_path / "projects" / "repo"
+    proj.mkdir(parents=True)
+    # far-future timestamp should be excluded; past timestamp should be included
+    future_ts = "2099-01-01T00:00:00Z"
+    past_ts = "1970-01-01T01:00:00Z"  # 3600.0
+    (proj / "b.jsonl").write_text("\n".join([
+        _line(future_ts, 999, 0, 0),
+        _line(past_ts, 50, 0, 0),
+    ]))
+    src = get_source("claude_code", {"projects_dir": str(tmp_path / "projects")})
+    now = 7200.0
+    _, events = src.scan({}, now=now, window=7200.0)
+    tss = [ts for ts, _ in events]
+    assert all(ts <= now for ts in tss), f"future event leaked: {tss}"
+    assert (3600.0, 50) in events
