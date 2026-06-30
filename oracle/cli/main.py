@@ -3,6 +3,7 @@ import argparse
 import json
 import time
 
+from ..cli import colors as colors
 from ..core.config import load_config, default_config_path
 from ..core.engine import forecast as run_forecast
 from ..snapshot.writer import build_snapshot, write_snapshot
@@ -17,6 +18,28 @@ def _add_common(p):
 
 def _now(args):
     return args.now if args.now is not None else time.time()
+
+
+def _doctor_lines(cfg, config_path, color):
+    from ..core.config import default_config_path
+    from ..sources.base import available
+    avail = available()
+    rows = [
+        ("config", config_path or default_config_path(), True),
+        ("source", f"{cfg.source} (available: {', '.join(avail)})",
+         cfg.source in avail),
+        ("cache", cfg.cache_path, True),
+        ("windows", f"{len(cfg.windows)} → {[w.name for w in cfg.windows]}",
+         len(cfg.windows) > 0),
+    ]
+    out = [colors.violet(f"{colors.M_ORACLE} oracle doctor", color)]
+    ok = 0
+    for name, detail, good in rows:
+        ok += 1 if good else 0
+        out.append(f"  {colors.ok_badge(good, color)} {name:<8} — {detail}")
+    bad = len(rows) - ok
+    out.append(colors.dim(f"  {ok} ok · {bad} need attention", color))
+    return out
 
 
 def main(argv=None):
@@ -52,10 +75,8 @@ def main(argv=None):
         print(tx.render(run_forecast(now, cfg)))
         return 0
     if args.cmd == "doctor":
-        print(f"config:  {args.config or default_config_path()}")
-        print(f"source:  {cfg.source}  (available: {', '.join(available())})")
-        print(f"cache:   {cfg.cache_path}")
-        print(f"windows: {len(cfg.windows)} -> {[w.name for w in cfg.windows]}")
+        for line in _doctor_lines(cfg, args.config, colors.color_enabled()):
+            print(line)
         return 0
     if args.cmd == "dash":
         from ..dashboard.app import run as run_dash
