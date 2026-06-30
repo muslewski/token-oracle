@@ -1,6 +1,6 @@
-<h1 align="center">🔮 token-oracle</h1>
-
-<p align="center">Provider-agnostic token usage-cap forecaster — know when you'll hit your limit before you hit it.</p>
+<p align="center">
+  <img src="./assets/oracle-banner.png" alt="token-oracle — know when you'll hit the limit" width="900">
+</p>
 
 <p align="center">
   <a href="https://pypi.org/project/token-oracle/"><img src="https://img.shields.io/pypi/v/token-oracle?label=PyPI" alt="PyPI version"></a>
