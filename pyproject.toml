@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "token-oracle"
-version = "0.1.0"
+version = "0.1.1"
 description = "Observed-Rate Allowance & Cap-Limit Estimator — provider-agnostic token usage-cap forecaster"
 readme = "README.md"
 requires-python = ">=3.10"
