@@ -1,4 +1,4 @@
-from oracle.core.profile import build_profile, profile_integral, N_BUCKETS
+from token_oracle.core.profile import N_BUCKETS, build_profile, profile_integral
 
 
 def test_empty_events_zero_profile():
