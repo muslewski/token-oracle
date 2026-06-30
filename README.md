@@ -1,5 +1,9 @@
 <p align="center">
-  <img src="./assets/oracle-banner.png" alt="token-oracle — know when you'll hit the limit" width="900">
+  <picture>
+    <source srcset="./assets/oracle-banner.avif" type="image/avif">
+    <source srcset="./assets/oracle-banner.webp" type="image/webp">
+    <img src="./assets/oracle-banner.webp" alt="token-oracle — know when you'll hit the limit" width="900">
+  </picture>
 </p>
 
 <p align="center">

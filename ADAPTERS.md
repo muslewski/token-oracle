@@ -1,7 +1,11 @@
 # ADAPTERS
 
 <p align="center">
-  <img src="assets/banner-adapters-oracle.png" alt="token-oracle — adapters: plug external code into the forecast engine" width="900">
+  <picture>
+    <source srcset="assets/banner-adapters-oracle.avif" type="image/avif">
+    <source srcset="assets/banner-adapters-oracle.webp" type="image/webp">
+    <img src="assets/banner-adapters-oracle.webp" alt="token-oracle — adapters: plug external code into the forecast engine" width="900">
+  </picture>
 </p>
 
 Two adapter interfaces let external code plug into token-oracle:
