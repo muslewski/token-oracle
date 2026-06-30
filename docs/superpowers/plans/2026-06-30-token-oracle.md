@@ -1611,7 +1611,9 @@ def test_statusline_runs(tmp_path, capsys):
     now = 100000.0
     cfg = _cfg(tmp_path, [[now - 100.0, 250]], now)
     assert main(["statusline", "--config", cfg, "--now", str(now)]) == 0
-    assert "250" in capsys.readouterr().out or True  # may render compact tokens
+    out = capsys.readouterr().out
+    assert out.strip()                 # renders a non-empty status line
+    assert "/1k" in out or "0k" in out  # used/cap tokens segment present
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
