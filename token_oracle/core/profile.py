@@ -1,12 +1,13 @@
 """Pattern-aware burn profile: 168-bucket (hour-of-week) tok/s rate with
 recency decay and empirical-Bayes shrinkage. Stdlib only. ML seam: replace
 build_profile with a learned model exposing the same signature."""
+
 from .timeutil import bucket_key
 
-N_BUCKETS = 168                       # 7 weekdays x 24 hours
-HIST_SECS = 63 * 24 * 3600            # trailing retention (9 weeks)
+N_BUCKETS = 168  # 7 weekdays x 24 hours
+HIST_SECS = 63 * 24 * 3600  # trailing retention (9 weeks)
 DECAY_HALFLIFE_SECS = 14 * 24 * 3600  # recency half-life
-SHRINK_K = 3.0                        # empirical-Bayes pseudo-count
+SHRINK_K = 3.0  # empirical-Bayes pseudo-count
 
 
 def _decay(age_secs):

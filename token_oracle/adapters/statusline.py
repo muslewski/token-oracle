@@ -1,13 +1,13 @@
 """Thin reference adapter: render a Forecast list to one ANSI status line.
 Proof the engine renders anywhere; a polished status bar is a separate project."""
-from ..core.timeutil import fmt_tokens, fmt_hms, fmt_dh_long
+
 from ..cli import colors as c
+from ..core.timeutil import fmt_dh_long, fmt_hms, fmt_tokens
 
 
 def _segment(f, enabled):
     pct = f.projected_pct
-    body = (f"{fmt_hms(f.reset_in_secs)} "
-            f"{fmt_tokens(f.used)}/{fmt_tokens(f.cap)} →{round(pct)}%")
+    body = f"{fmt_hms(f.reset_in_secs)} {fmt_tokens(f.used)}/{fmt_tokens(f.cap)} →{round(pct)}%"
     if f.eta_to_cap_secs is not None:
         body += f" {c.M_WARN} cap {fmt_dh_long(f.eta_to_cap_secs)}"
     return f"{c.violet('🕐', enabled)} {c.gauge(body, pct, enabled)}"

@@ -1,5 +1,6 @@
 """Persistent aggregation cache: source-owned file state + last-aggregate time
 + burn profile. Atomic writes. Never raises to the caller."""
+
 import json
 import os
 

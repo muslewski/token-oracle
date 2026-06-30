@@ -1,5 +1,6 @@
 """Config loading + shipped presets. The forecast target is fully config-driven;
 Claude's max20 caps ship as one preset, not as core law."""
+
 import json
 import os
 from dataclasses import dataclass, field
@@ -32,21 +33,20 @@ def _xdg(env, default_tail):
 
 
 def default_config_path():
-    return os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"),
-                        "token-oracle", "config.json")
+    return os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "token-oracle", "config.json")
 
 
 def default_cache_path():
-    return os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"),
-                        "token-oracle", "cache.json")
+    return os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "token-oracle", "cache.json")
 
 
 def _window_from_dict(d) -> Window:
     anchor = d.get("anchor")
     if isinstance(anchor, str):
         anchor = parse_ts(anchor)
-    return Window(name=d["name"], cap=int(d["cap"]),
-                  period_secs=int(d["period_secs"]), anchor=anchor)
+    return Window(
+        name=d["name"], cap=int(d["cap"]), period_secs=int(d["period_secs"]), anchor=anchor
+    )
 
 
 def load_config(path: str | None = None) -> "Config":
@@ -61,6 +61,9 @@ def load_config(path: str | None = None) -> "Config":
         pass
     windows = [_window_from_dict(w) for w in raw.get("windows", [])]
     cache_path = os.path.expanduser(raw.get("cache_path") or default_cache_path())
-    return Config(source=raw.get("source", "claude_code"),
-                  source_opts=raw.get("source_opts", {}),
-                  cache_path=cache_path, windows=windows)
+    return Config(
+        source=raw.get("source", "claude_code"),
+        source_opts=raw.get("source_opts", {}),
+        cache_path=cache_path,
+        windows=windows,
+    )

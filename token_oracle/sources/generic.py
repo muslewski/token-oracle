@@ -1,6 +1,7 @@
 """Documented stub source for non-Claude providers. Feed it a JSON file of
 neutral [[timestamp, tokens], ...] pairs. Copy this file to build your own
 adapter; see ADAPTERS.md."""
+
 import json
 import os
 

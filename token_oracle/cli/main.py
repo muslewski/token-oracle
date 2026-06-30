@@ -1,13 +1,15 @@
 """oracle CLI: forecast / snapshot / statusline / tmux / doctor / dash."""
+
 import argparse
 import json
 import time
 
+from ..adapters import statusline as sl
+from ..adapters import tmux as tx
 from ..cli import colors
-from ..core.config import load_config, default_config_path
+from ..core.config import default_config_path, load_config
 from ..core.engine import forecast as run_forecast
 from ..snapshot.writer import build_snapshot, write_snapshot
-from ..adapters import statusline as sl, tmux as tx
 from ..sources.base import available
 
 
@@ -24,11 +26,9 @@ def _doctor_lines(cfg, config_path, color):
     avail = available()
     rows = [
         ("config", config_path or default_config_path(), True),
-        ("source", f"{cfg.source} (available: {', '.join(avail)})",
-         cfg.source in avail),
+        ("source", f"{cfg.source} (available: {', '.join(avail)})", cfg.source in avail),
         ("cache", cfg.cache_path, True),
-        ("windows", f"{len(cfg.windows)} → {[w.name for w in cfg.windows]}",
-         len(cfg.windows) > 0),
+        ("windows", f"{len(cfg.windows)} → {[w.name for w in cfg.windows]}", len(cfg.windows) > 0),
     ]
     out = [colors.violet(f"{colors.M_ORACLE} oracle doctor", color)]
     ok = 0
@@ -78,5 +78,6 @@ def main(argv=None):
         return 0
     if args.cmd == "dash":
         from ..dashboard.app import run as run_dash
+
         return run_dash(cfg, now)
     return 1

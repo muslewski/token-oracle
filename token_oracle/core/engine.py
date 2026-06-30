@@ -1,16 +1,17 @@
 """Forecast facade: source scan -> cache -> burn profile -> per-window compute.
 Never raises; returns [] on hard failure."""
-from .cache import (load_cache, save_cache, events_from_cache,
-                    AGGREGATE_INTERVAL)
-from .profile import build_profile, HIST_SECS
-from .windows import compute_window
+
+from .cache import AGGREGATE_INTERVAL, load_cache, save_cache
 from .config import load_config
+from .profile import HIST_SECS, build_profile
+from .windows import compute_window
 
 
 def forecast(now, config=None):
     try:
         cfg = config or load_config()
         from ..sources.base import get_source
+
         source = get_source(cfg.source, cfg.source_opts)
         cache = load_cache(cfg.cache_path)
         if now - cache.get("lastAggregate", 0) >= AGGREGATE_INTERVAL:

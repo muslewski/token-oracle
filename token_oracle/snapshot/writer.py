@@ -1,5 +1,6 @@
 """Stable JSON snapshot any external consumer (agentic-sage, a status bar) can
 read. Schema is versioned; see ADAPTERS.md. Atomic write, never raises."""
+
 import json
 import os
 from dataclasses import asdict
@@ -12,8 +13,11 @@ def forecast_to_dict(f):
 
 
 def build_snapshot(forecasts, now):
-    return {"schema": SCHEMA_VERSION, "generated_at": now,
-            "windows": [forecast_to_dict(f) for f in forecasts]}
+    return {
+        "schema": SCHEMA_VERSION,
+        "generated_at": now,
+        "windows": [forecast_to_dict(f) for f in forecasts],
+    }
 
 
 def default_snapshot_path():

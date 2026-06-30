@@ -1,5 +1,6 @@
 """Source adapter registry. A source turns provider data into neutral
 (timestamp, tokens) events, owning its own incremental file/cache state."""
+
 _REGISTRY = {}
 
 
@@ -7,6 +8,7 @@ def register(name):
     def deco(cls):
         _REGISTRY[name] = cls
         return cls
+
     return deco
 
 

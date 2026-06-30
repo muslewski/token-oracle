@@ -1,5 +1,6 @@
 """First source adapter: Claude Code transcripts (~/.claude/projects/*/*.jsonl).
 Ported from usage_limits.iter_usage_events + scan_events."""
+
 import glob
 import json
 import os
@@ -11,9 +12,11 @@ from .base import register
 def _limit_tokens(usage):
     if not usage:
         return 0
-    return (usage.get("input_tokens", 0)
-            + usage.get("output_tokens", 0)
-            + usage.get("cache_creation_input_tokens", 0))
+    return (
+        usage.get("input_tokens", 0)
+        + usage.get("output_tokens", 0)
+        + usage.get("cache_creation_input_tokens", 0)
+    )
 
 
 def iter_usage_events(jsonl_path):
@@ -45,8 +48,7 @@ def iter_usage_events(jsonl_path):
 @register("claude_code")
 class ClaudeCodeSource:
     def __init__(self, opts):
-        self.projects_dir = os.path.expanduser(
-            opts.get("projects_dir") or "~/.claude/projects")
+        self.projects_dir = os.path.expanduser(opts.get("projects_dir") or "~/.claude/projects")
 
     def scan(self, files_state, now, window):
         cutoff = now - window
@@ -74,6 +76,8 @@ class ClaudeCodeSource:
             files.pop(gone, None)
         out = []
         for ent in files.values():
-            out.extend((float(ts), int(tok)) for ts, tok in ent.get("events", []) if cutoff <= ts <= now)
+            out.extend(
+                (float(ts), int(tok)) for ts, tok in ent.get("events", []) if cutoff <= ts <= now
+            )
         out.sort()
         return files, out

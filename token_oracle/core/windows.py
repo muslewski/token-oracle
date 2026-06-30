@@ -1,8 +1,9 @@
 """Forecast one Window from neutral (ts, tokens) events. Generalizes the
 5h-block (rolling, anchor=None) and weekly (fixed grid, anchor set) windows
 into a single history-aware projection. Never raises."""
+
 from .contracts import Forecast
-from .profile import profile_integral, HIST_SECS
+from .profile import HIST_SECS, profile_integral
 
 
 def eta_to_cap(used, projected_pct, time_left, cap):
@@ -34,7 +35,7 @@ def _bounds(events, now, window):
     start = events[0][0]
     for ts, _tok in events[1:]:
         if ts >= start + P:
-            start = ts          # window expired -> re-anchor here
+            start = ts  # window expired -> re-anchor here
     reset = start + P
     if now > reset:
         return None
@@ -66,5 +67,4 @@ def compute_window(events, now, window, profile=None):
     projected_pct = (projected / cap * 100) if cap else 0.0
     reset_in = reset - now
     eta = eta_to_cap(used, projected_pct, reset_in, cap)
-    return Forecast(window.name, int(used), cap, projected_pct, eta,
-                    float(reset_in), False)
+    return Forecast(window.name, int(used), cap, projected_pct, eta, float(reset_in), False)
