@@ -51,7 +51,7 @@ def test_doctor_footer_and_badges(tmp_path, capsys):
     assert "✓" in out  # source + windows are valid here → at least one pass
 
 
-def test_doctor_flags_bad_source(tmp_path, capsys):
+def test_doctor_flags_bad_source(tmp_path):
     from oracle.cli.main import _doctor_lines
     from oracle.core.config import load_config
     cfg_path = _cfg(tmp_path, [], 100000.0)

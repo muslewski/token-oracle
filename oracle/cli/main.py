@@ -3,7 +3,7 @@ import argparse
 import json
 import time
 
-from ..cli import colors as colors
+from ..cli import colors
 from ..core.config import load_config, default_config_path
 from ..core.engine import forecast as run_forecast
 from ..snapshot.writer import build_snapshot, write_snapshot
@@ -21,8 +21,6 @@ def _now(args):
 
 
 def _doctor_lines(cfg, config_path, color):
-    from ..core.config import default_config_path
-    from ..sources.base import available
     avail = available()
     rows = [
         ("config", config_path or default_config_path(), True),
