@@ -1,4 +1,4 @@
-from oracle.core.contracts import UsageEvent, Window, Forecast, to_pairs
+from token_oracle.core.contracts import UsageEvent, Window, Forecast, to_pairs
 
 def test_usageevent_defaults():
     e = UsageEvent(timestamp=100.0, tokens=5)

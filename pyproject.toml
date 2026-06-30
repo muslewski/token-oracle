@@ -35,7 +35,8 @@ dev = [
 ]
 
 [project.scripts]
-oracle = "oracle.cli.main:main"
+token-oracle = "token_oracle.cli.main:main"
+oracle = "token_oracle.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/muslewski/token-oracle"
@@ -44,7 +45,7 @@ Issues = "https://github.com/muslewski/token-oracle/issues"
 Changelog = "https://github.com/muslewski/token-oracle/blob/main/CHANGELOG.md"
 
 [tool.hatch.build.targets.wheel]
-packages = ["oracle"]
+packages = ["token_oracle"]
 
 [tool.ruff]
 line-length = 100

@@ -1,4 +1,4 @@
-import oracle.cli.colors as c
+import token_oracle.cli.colors as c
 
 
 def test_gauge_tier_boundaries():

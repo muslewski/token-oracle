@@ -1,5 +1,5 @@
-from oracle.core.contracts import Forecast
-from oracle.dashboard.app import render_frame
+from token_oracle.core.contracts import Forecast
+from token_oracle.dashboard.app import render_frame
 
 
 def test_render_frame_lists_windows():

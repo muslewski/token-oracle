@@ -3,7 +3,7 @@ import json
 import os
 import sys
 
-from oracle.core.config import default_config_path, PRESETS
+from token_oracle.core.config import default_config_path, PRESETS
 
 
 def write_default_config(path=None, preset="max20", force=False) -> str:

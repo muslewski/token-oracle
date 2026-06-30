@@ -1,6 +1,6 @@
 import json, os
-from oracle.sources.base import get_source, available
-from oracle.sources.claude_code import iter_usage_events
+from token_oracle.sources.base import get_source, available
+from token_oracle.sources.claude_code import iter_usage_events
 
 def _line(ts, inp, out, cc):
     return json.dumps({"timestamp": ts, "message": {"usage": {

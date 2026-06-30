@@ -1,4 +1,4 @@
-from oracle.core import timeutil as T
+from token_oracle.core import timeutil as T
 
 def test_parse_ts_z_suffix():
     assert T.parse_ts("1970-01-01T00:00:00Z") == 0.0

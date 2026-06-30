@@ -1,5 +1,5 @@
 import json
-from oracle.cli.main import main
+from token_oracle.cli.main import main
 
 def _cfg(tmp_path, feed_events, now):
     feed = tmp_path / "feed.json"
@@ -52,8 +52,8 @@ def test_doctor_footer_and_badges(tmp_path, capsys):
 
 
 def test_doctor_flags_bad_source(tmp_path):
-    from oracle.cli.main import _doctor_lines
-    from oracle.core.config import load_config
+    from token_oracle.cli.main import _doctor_lines
+    from token_oracle.core.config import load_config
     cfg_path = _cfg(tmp_path, [], 100000.0)
     cfg = load_config(cfg_path)
     cfg.source = "nope-not-real"

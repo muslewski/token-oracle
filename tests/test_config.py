@@ -1,6 +1,6 @@
 import json
-from oracle.core import config as CFG
-from oracle.core.contracts import Window
+from token_oracle.core import config as CFG
+from token_oracle.core.contracts import Window
 
 def test_default_is_max20_when_missing(tmp_path):
     c = CFG.load_config(str(tmp_path / "none.json"))

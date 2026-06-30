@@ -1,6 +1,6 @@
-import oracle.cli.colors as colors
-from oracle.core.contracts import Forecast
-from oracle.adapters import statusline, tmux
+import token_oracle.cli.colors as colors
+from token_oracle.core.contracts import Forecast
+from token_oracle.adapters import statusline, tmux
 
 F_OK = Forecast("5h", 12000, 220000, 42.0, None, 3 * 3600 + 46 * 60, False)
 F_HOT = Forecast("weekly", 5_000_000, 8_000_000, 130.0, 90000.0,

@@ -1,5 +1,5 @@
-from oracle.core.contracts import Window
-from oracle.core.windows import compute_window, eta_to_cap
+from token_oracle.core.contracts import Window
+from token_oracle.core.windows import compute_window, eta_to_cap
 
 def test_eta_none_when_under_cap():
     assert eta_to_cap(50, 80.0, 3600.0, 100) is None

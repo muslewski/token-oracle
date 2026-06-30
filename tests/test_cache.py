@@ -1,5 +1,5 @@
 import os
-from oracle.core import cache as C
+from token_oracle.core import cache as C
 
 def test_load_missing_returns_default(tmp_path):
     c = C.load_cache(str(tmp_path / "nope.json"))

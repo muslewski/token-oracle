@@ -1,5 +1,5 @@
 import json
-from oracle.sources.base import get_source, available
+from token_oracle.sources.base import get_source, available
 
 
 def test_generic_registered():

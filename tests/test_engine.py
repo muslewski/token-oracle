@@ -1,7 +1,7 @@
 import json
-from oracle.core.config import Config
-from oracle.core.contracts import Window
-from oracle.core.engine import forecast
+from token_oracle.core.config import Config
+from token_oracle.core.contracts import Window
+from token_oracle.core.engine import forecast
 
 def test_forecast_over_generic_source(tmp_path):
     feed = tmp_path / "feed.json"

@@ -1,6 +1,6 @@
 import json
-from oracle.core.contracts import Forecast
-from oracle.snapshot.writer import (build_snapshot, write_snapshot,
+from token_oracle.core.contracts import Forecast
+from token_oracle.snapshot.writer import (build_snapshot, write_snapshot,
                                      forecast_to_dict, SCHEMA_VERSION)
 
 def test_schema_shape_is_stable():
