@@ -40,3 +40,22 @@ def test_statusline_runs(tmp_path, capsys):
     out = capsys.readouterr().out
     assert out.strip()                 # renders a non-empty status line
     assert "/1k" in out or "0k" in out  # used/cap tokens segment present
+
+def test_doctor_footer_and_badges(tmp_path, capsys):
+    now = 100000.0
+    cfg = _cfg(tmp_path, [], now)
+    main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "oracle doctor" in out
+    assert "ok ·" in out and "need attention" in out
+    assert "✓" in out  # source + windows are valid here → at least one pass
+
+
+def test_doctor_flags_bad_source(tmp_path):
+    from oracle.cli.main import _doctor_lines
+    from oracle.core.config import load_config
+    cfg_path = _cfg(tmp_path, [], 100000.0)
+    cfg = load_config(cfg_path)
+    cfg.source = "nope-not-real"
+    out = "\n".join(_doctor_lines(cfg, cfg_path, color=False))
+    assert "✗" in out and "1 need attention" in out
