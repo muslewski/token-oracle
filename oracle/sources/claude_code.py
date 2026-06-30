@@ -74,6 +74,6 @@ class ClaudeCodeSource:
             files.pop(gone, None)
         out = []
         for ent in files.values():
-            out.extend((float(ts), int(tok)) for ts, tok in ent.get("events", []) if ts >= cutoff)
+            out.extend((float(ts), int(tok)) for ts, tok in ent.get("events", []) if cutoff <= ts <= now)
         out.sort()
         return files, out
