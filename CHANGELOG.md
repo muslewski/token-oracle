@@ -4,6 +4,20 @@ All notable changes to token-oracle are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2](https://github.com/muslewski/token-oracle/compare/token-oracle-v0.1.1...token-oracle-v0.1.2) (2026-06-30)
+
+
+### Performance Improvements
+
+* **assets:** serve avif/webp banners via &lt;picture&gt; ([e39ea3a](https://github.com/muslewski/token-oracle/commit/e39ea3a0699223457ad02ddaa7ef7196cc497417))
+
+
+### Documentation
+
+* add adapters banner to ADAPTERS.md ([9b8db04](https://github.com/muslewski/token-oracle/commit/9b8db04297c8396bef1b3451536c35104685fbc3))
+* add hero banner to README ([15d9e29](https://github.com/muslewski/token-oracle/commit/15d9e29da1285b822b2fcada44f24b83a605eb71))
+* cache-bust README badges to force camo refresh ([d2b4d32](https://github.com/muslewski/token-oracle/commit/d2b4d32a36b659863d764760ff698eca07e1e087))
+
 ## [0.1.1](https://github.com/muslewski/token-oracle/compare/token-oracle-v0.1.0...token-oracle-v0.1.1) (2026-06-30)
 
 
