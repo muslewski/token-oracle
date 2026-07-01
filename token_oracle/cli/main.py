@@ -3,6 +3,7 @@
 import argparse
 import json
 import os
+import sys
 import time
 
 from ..adapters import statusline as sl
@@ -118,6 +119,9 @@ def main(argv=None):
     if args.cmd == "snapshot":
         fs = run_forecast(now, cfg)
         path = write_snapshot(fs, now, args.out)
+        if path is None:
+            print("snapshot: write failed", file=sys.stderr)
+            return 1
         print(path)
         return 0
     if args.cmd == "statusline":

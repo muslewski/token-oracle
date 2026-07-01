@@ -209,3 +209,5 @@ Example cron (every 5 minutes):
 ```
 */5 * * * * oracle snapshot >/dev/null 2>&1
 ```
+
+`oracle snapshot` exits non-zero and prints to stderr if the file could not be written — don't discard stderr in cron if you want to notice.

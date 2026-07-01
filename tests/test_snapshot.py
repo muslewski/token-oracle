@@ -33,6 +33,15 @@ def test_build_snapshot_envelope():
 
 def test_write_snapshot_roundtrip(tmp_path):
     p = str(tmp_path / "d" / "forecast.json")
-    write_snapshot([Forecast("wk", 5, 9, 55.0, None, 600.0, False)], 7.0, p)
+    result = write_snapshot([Forecast("wk", 5, 9, 55.0, None, 600.0, False)], 7.0, p)
+    assert result == p
     snap = json.load(open(p))
     assert snap["windows"][0]["window"] == "wk"
+
+
+def test_write_snapshot_returns_none_on_failure(tmp_path):
+    (tmp_path / "blocker").write_text("file, not a dir")
+    p = str(tmp_path / "blocker" / "forecast.json")
+    result = write_snapshot([Forecast("wk", 5, 9, 55.0, None, 600.0, False)], 7.0, p)
+    assert result is None
+    assert [e.name for e in tmp_path.iterdir()] == ["blocker"]

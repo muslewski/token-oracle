@@ -1,8 +1,10 @@
 """Stable JSON snapshot any external consumer (agentic-sage, a status bar) can
-read. Schema is versioned; see ADAPTERS.md. Atomic write, never raises."""
+read. Schema is versioned; see ADAPTERS.md. Atomic write; returns the path, or
+None when the write failed."""
 
 import json
 import os
+import tempfile
 from dataclasses import asdict
 
 SCHEMA_VERSION = 1
@@ -31,10 +33,17 @@ def write_snapshot(forecasts, now, path=None):
         d = os.path.dirname(path)
         if d:
             os.makedirs(d, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(build_snapshot(forecasts, now), fh)
-        os.replace(tmp, path)
+        fd, tmp = tempfile.mkstemp(dir=d or ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(build_snapshot(forecasts, now), fh)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except OSError:
-        pass
+        return None
     return path
