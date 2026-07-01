@@ -79,5 +79,5 @@ def main(argv=None):
     if args.cmd == "dash":
         from ..dashboard.app import run as run_dash
 
-        return run_dash(cfg, now)
+        return run_dash(cfg)
     return 1
