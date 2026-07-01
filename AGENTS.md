@@ -26,9 +26,10 @@ python -m pytest -q
 Expected output (last line):
 
 ```
-54 passed in 0.XXs
+71 passed in 0.XXs
 ```
 
+The exact count grows as tests are added; any failure or error means stop.
 If any tests fail, stop and report the failure. Do not proceed with further
 steps or doc changes until the suite is green.
 
@@ -40,18 +41,22 @@ steps or doc changes until the suite is green.
 oracle doctor
 ```
 
-Expected output (paths will differ per machine):
+Expected output (paths will differ per machine; run with `NO_COLOR=1` for
+plain output, otherwise ANSI color codes will be present):
 
 ```
-config:  /home/<user>/.config/token-oracle/config.json
-source:  claude_code  (available: claude_code, generic)
-cache:   /home/<user>/.local/share/token-oracle/cache.json
-windows: 2 -> ['5h', 'weekly']
+🔮 oracle doctor
+  ✓ config   — /home/<user>/.config/token-oracle/config.json
+  ✓ source   — claude_code (available: claude_code, generic)
+  ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json
+  ✓ windows  — 2 → ['5h', 'weekly']
+  4 ok · 0 need attention
 ```
 
-The `source:` line must show `claude_code` as the active source and list at
-least `claude_code, generic` as available. The `windows:` line must show two
-windows named `5h` and `weekly` (the built-in `max20` preset).
+The `source` row must show `claude_code` as the active source and list at
+least `claude_code, generic` as available. The `windows` row must show two
+windows named `5h` and `weekly` (the built-in `max20` preset). Each row is
+badged `✓` (good) or `✗` (needs attention); the footer line tallies the count.
 
 ---
 
@@ -76,10 +81,12 @@ EOF
 Re-run `oracle doctor` to confirm the config file is now loaded:
 
 ```
-config:  /home/<user>/.config/token-oracle/config.json
-source:  claude_code  (available: claude_code, generic)
-cache:   /home/<user>/.local/share/token-oracle/cache.json
-windows: 2 -> ['5h', 'weekly']
+🔮 oracle doctor
+  ✓ config   — /home/<user>/.config/token-oracle/config.json
+  ✓ source   — claude_code (available: claude_code, generic)
+  ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json
+  ✓ windows  — 2 → ['5h', 'weekly']
+  4 ok · 0 need attention
 ```
 
 ---
@@ -94,8 +101,10 @@ Expected: a human-readable status line, or `idle` if no Claude Code usage has
 been recorded recently. Example non-idle output:
 
 ```
-3h42m  45.2k/220k ->21%
+🕐 3:42 45k/220k →21%
 ```
+
+ANSI color codes are present in the actual output unless `NO_COLOR=1` is set.
 
 To get machine-readable output:
 
@@ -167,8 +176,8 @@ forecast file fresh.
 ## Verification checklist
 
 - [ ] `pip install -e ".[dev]"` exits 0
-- [ ] `python -m pytest -q` reports `54 passed`
-- [ ] `oracle doctor` shows `source: claude_code` and `windows: 2`
+- [ ] `python -m pytest -q` reports all tests passing (count grows over time)
+- [ ] `oracle doctor` shows a `source` row for `claude_code` and a `windows` row for `2`
 - [ ] `oracle forecast` returns a line or `idle` (no stack trace)
 - [ ] `oracle forecast --json` returns valid JSON with `"schema": 1`
 - [ ] `oracle snapshot` prints a path and the file exists

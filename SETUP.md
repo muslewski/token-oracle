@@ -14,8 +14,8 @@ Or with pip:
 pip install token-oracle
 ```
 
-This registers the `oracle` entry point and gives you `forecast`, `snapshot`,
-`doctor`, `statusline`, and `tmux` subcommands.
+This registers the `token-oracle` command (plus the `oracle` alias) and gives
+you `forecast`, `snapshot`, `doctor`, `statusline`, and `tmux` subcommands.
 
 ### Tier 2 — + live dashboard
 
@@ -46,7 +46,7 @@ set -g status-right '#(oracle tmux)'
 git clone <repo>
 cd token-oracle
 pip install -e ".[dev]"
-python -m pytest -q              # 54 tests, all green
+python -m pytest -q              # all green
 ```
 
 ### Tier 5 — library use (no CLI)
@@ -55,8 +55,8 @@ Install the same package and import directly:
 
 ```python
 import time
-from oracle.core.engine import forecast
-from oracle.core.config import load_config
+from token_oracle.core.engine import forecast
+from token_oracle.core.config import load_config
 
 forecasts = forecast(time.time())
 for f in forecasts:

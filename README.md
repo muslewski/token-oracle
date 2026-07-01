@@ -42,11 +42,11 @@ Supported sources:
 | Source | Log location |
 |--------|-------------|
 | Claude Code | `~/.claude/projects/*/*.jsonl` |
-| Generic (stdin) | pipe any JSON usage stream |
+| Generic (file) | JSON file of `[timestamp, tokens]` pairs via `source_opts.events_path` |
 
 ## Parts & options
 
-All subcommands accept `--config FILE` (default: `~/.config/token-oracle/config.toml`).
+All subcommands accept `--config FILE` (default: `~/.config/token-oracle/config.json`).
 
 | Subcommand | Extra flags | Description |
 |------------|-------------|-------------|
@@ -83,13 +83,15 @@ See [ADAPTERS.md](ADAPTERS.md) for setup and configuration.
 
 ## Colors
 
-The forecast bar uses colour thresholds to signal urgency:
+The forecast bar uses colour thresholds on projected usage at window end (as
+a % of cap) to signal urgency:
 
-| Colour | Meaning |
-|--------|---------|
-| 🟢 Green | > 40 % remaining |
-| 🟡 Yellow | 15 – 40 % remaining |
-| 🔴 Red | < 15 % remaining |
+| Colour | Projected % of cap |
+|--------|--------------------|
+| 🟢 Green | < 85 % |
+| 🟡 Lime | 85 – 100 % |
+| 🟠 Orange | 100 – 120 % |
+| 🔴 Red | ≥ 120 % |
 
 ## Works with agentic-sage
 
