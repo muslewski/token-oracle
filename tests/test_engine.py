@@ -47,3 +47,24 @@ def test_forecast_warm_cache_replays_generic(tmp_path):
     out2 = forecast(now + 5.0, cfg)  # warm (within 30s) must replay, not idle
     assert out2[0].used == 250
     assert out2[0].idle is False
+
+
+def test_forecast_recovers_from_corrupt_cache(tmp_path):
+    feed = tmp_path / "feed.json"
+    now = 100000.0
+    feed.write_text(json.dumps([[now - 600.0, 200], [now - 60.0, 50]]))
+    cache_path = tmp_path / "cache.json"
+    cache_path.write_text("{ not json")
+    cfg = Config(
+        source="generic",
+        source_opts={"events_path": str(feed)},
+        cache_path=str(cache_path),
+        windows=[Window("5h", 1000, 18000)],
+    )
+    out = forecast(now, cfg)
+    assert len(out) == 1
+    assert out[0].used == 250
+    # cache falls back to default and gets rewritten with valid JSON
+    with open(cache_path) as fh:
+        data = json.load(fh)
+    assert "files" in data

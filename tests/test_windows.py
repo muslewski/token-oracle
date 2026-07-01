@@ -1,3 +1,5 @@
+import pytest
+
 from token_oracle.core.contracts import Window
 from token_oracle.core.windows import compute_window, eta_to_cap
 
@@ -43,8 +45,78 @@ def test_fixed_window_never_idle():
 def test_projection_sets_eta_when_burning_hot():
     now = 100000.0
     w = Window(name="5h", cap=300, period_secs=18000)
-    # heavy burst near window start: projected should exceed cap -> eta set
-    evs = [(now - 17000.0, 250), (now - 100.0, 40)]
+    # single event 100s before window "now": tiny f, but huge measured_term
+    # (280/100 tok/s) means f * measured_term alone clears the cap.
+    evs = [(now - 100.0, 280)]
     f = compute_window(evs, now, w)
-    if f.projected_pct > 100:
-        assert f.eta_to_cap_secs is not None
+    assert f.projected_pct > 100
+    assert f.eta_to_cap_secs is not None
+    assert f.eta_to_cap_secs > 0
+
+
+def test_rolling_reanchors_across_blocks():
+    P = 18000
+    w = Window(name="5h", cap=100000, period_secs=P)
+    # start 0 -> re-anchor at 20000 (>= 0+P) -> re-anchor at 39000 (>= 20000+P)
+    evs = [(0.0, 100), (20000.0, 50), (39000.0, 25)]
+    now = 40000.0
+    f = compute_window(evs, now, w)
+    assert f.used == 25
+    assert f.reset_in_secs == 17000.0
+    assert f.idle is False
+
+
+def test_rolling_expired_is_idle():
+    P = 18000
+    w = Window(name="5h", cap=100000, period_secs=P)
+    evs = [(0.0, 100)]
+    now = 20000.0  # > reset (18000)
+    f = compute_window(evs, now, w)
+    assert f.idle is True
+    assert f.used == 0
+    assert f.reset_in_secs == float(P)
+
+
+def test_anchored_future_anchor_characterized():
+    # characterization: future anchor yields a not-yet-started, non-idle window
+    P = 18000
+    now = 1000.0
+    anchor = now + 1000
+    w = Window(name="wk", cap=100000, period_secs=P, anchor=anchor)
+    f = compute_window([], now, w)
+    assert f.used == 0
+    assert f.idle is False
+    assert f.reset_in_secs == 19000.0  # > P
+
+
+def test_prior_history_raises_early_projection():
+    P = 18000
+    w = Window(name="5h", cap=100000, period_secs=P)
+    now = 100000.0
+    evs_a = [(now - 60.0, 100)]
+    evs_b = evs_a + [(now - 50000.0, 50000), (now - 40000.0, 50000)]  # before window start
+    f_a = compute_window(evs_a, now, w)
+    f_b = compute_window(evs_b, now, w)
+    assert f_a.used == f_b.used == 100
+    assert f_b.projected_pct > f_a.projected_pct
+
+
+def test_profile_prior_used_exactly():
+    P = 18000
+    w = Window(name="5h", cap=100000, period_secs=P)
+    now = 100000.0
+    prof = [0.01] * 168
+    used = 40
+    evs = [(now - 100.0, used)]
+    f = compute_window(evs, now, w, profile=prof)
+
+    start = now - 100.0
+    reset = start + P
+    elapsed = max(1.0, now - start)
+    frac = min(1.0, max(0.0, elapsed / P))
+    measured_term = (used / elapsed) * (reset - now)
+    prior_term = 0.01 * (reset - now)
+    expected_projected = used + (1.0 - frac) * prior_term + frac * measured_term
+    expected_pct = expected_projected / 100000 * 100
+
+    assert f.projected_pct == pytest.approx(expected_pct)
