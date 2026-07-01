@@ -38,9 +38,15 @@ def test_snapshot_writes_file(tmp_path, capsys):
     assert json.load(open(out_path))["schema"] == 1
 
 
-def test_doctor_exit_zero(tmp_path):
+def test_doctor_exit_one_when_no_events(tmp_path):
     now = 100000.0
     cfg = _cfg(tmp_path, [], now)
+    assert main(["doctor", "--config", cfg, "--now", str(now)]) == 1
+
+
+def test_doctor_exit_zero_with_events(tmp_path):
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
     assert main(["doctor", "--config", cfg, "--now", str(now)]) == 0
 
 
@@ -70,5 +76,67 @@ def test_doctor_flags_bad_source(tmp_path):
     cfg_path = _cfg(tmp_path, [], 100000.0)
     cfg = load_config(cfg_path)
     cfg.source = "nope-not-real"
-    out = "\n".join(_doctor_lines(cfg, cfg_path, color=False))
-    assert "✗" in out and "1 need attention" in out
+    lines, bad = _doctor_lines(cfg, cfg_path, color=False, now=100000.0)
+    out = "\n".join(lines)
+    assert bad >= 1
+    assert "✗" in out
+
+
+def test_doctor_data_row_counts_events(tmp_path, capsys):
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 200.0, 10], [now - 100.0, 20]], now)
+    main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "2 events" in out
+    assert "last" in out
+
+
+def test_doctor_reports_config_issues(tmp_path, capsys):
+    now = 100000.0
+    feed = tmp_path / "feed.json"
+    feed.write_text(json.dumps([[now - 100.0, 50]]))
+    cfg_path = tmp_path / "cfg.json"
+    cfg_path.write_text(
+        json.dumps(
+            {
+                "source": "generic",
+                "source_opts": {"events_path": str(feed)},
+                "cache_path": str(tmp_path / "cache.json"),
+                "windows": [{"cap": 1000, "period_secs": 18000}],  # missing "name"
+            }
+        )
+    )
+    rc = main(["doctor", "--config", str(cfg_path), "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "issue" in out
+    assert "✗" in out
+    assert rc == 1
+
+
+def test_doctor_missing_config_is_ok(tmp_path):
+    from token_oracle.cli.main import _doctor_lines
+    from token_oracle.core.config import load_config
+
+    missing_path = str(tmp_path / "does-not-exist.json")
+    cfg = load_config(missing_path)
+    # avoid the claude_code default source scanning the real ~/.claude/projects
+    cfg.source = "generic"
+    cfg.source_opts = {"events_path": str(tmp_path / "no-events.json")}
+    lines, _bad = _doctor_lines(cfg, missing_path, color=False, now=100000.0)
+    out = "\n".join(lines)
+    assert "missing — using built-in max20 preset" in out
+
+
+def test_doctor_corrupt_cache_flagged(tmp_path, capsys):
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    from token_oracle.core.config import load_config
+
+    cache_path = load_config(cfg).cache_path
+    with open(cache_path, "w", encoding="utf-8") as fh:
+        fh.write("{ not json")
+
+    rc = main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "corrupt" in out
+    assert rc == 1

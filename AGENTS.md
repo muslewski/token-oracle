@@ -42,21 +42,28 @@ oracle doctor
 ```
 
 Expected output (paths will differ per machine; run with `NO_COLOR=1` for
-plain output, otherwise ANSI color codes will be present):
+plain output, otherwise ANSI color codes will be present). This example is
+from a fresh machine with no config file yet, but with prior Claude Code
+usage on disk:
 
 ```
 🔮 oracle doctor
-  ✓ config   — /home/<user>/.config/token-oracle/config.json
+  ✓ config   — /home/<user>/.config/token-oracle/config.json (missing — using built-in max20 preset)
   ✓ source   — claude_code (available: claude_code, generic)
-  ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json
+  ✓ data     — 182 files, 32258 events, last 57s ago
+  ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json (updated 12m ago)
   ✓ windows  — 2 → ['5h', 'weekly']
-  4 ok · 0 need attention
+  5 ok · 0 need attention
 ```
 
 The `source` row must show `claude_code` as the active source and list at
-least `claude_code, generic` as available. The `windows` row must show two
-windows named `5h` and `weekly` (the built-in `max20` preset). Each row is
-badged `✓` (good) or `✗` (needs attention); the footer line tallies the count.
+least `claude_code, generic` as available. The `data` row must show a
+non-zero event count if Claude Code has been used recently; `no events found`
+with ✗ is expected on a fresh machine with no usage history yet — that is not
+a failure, just an empty history. The `windows` row must show two windows
+named `5h` and `weekly` (the built-in `max20` preset). Each row is badged `✓`
+(good) or `✗` (needs attention); the footer line tallies the count, and the
+process exit code is `0` only when every row is `✓`.
 
 ---
 
@@ -84,9 +91,10 @@ Re-run `oracle doctor` to confirm the config file is now loaded:
 🔮 oracle doctor
   ✓ config   — /home/<user>/.config/token-oracle/config.json
   ✓ source   — claude_code (available: claude_code, generic)
-  ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json
+  ✓ data     — 182 files, 32263 events, last 6s ago
+  ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json (updated 13m ago)
   ✓ windows  — 2 → ['5h', 'weekly']
-  4 ok · 0 need attention
+  5 ok · 0 need attention
 ```
 
 ---
@@ -177,7 +185,8 @@ forecast file fresh.
 
 - [ ] `pip install -e ".[dev]"` exits 0
 - [ ] `python -m pytest -q` reports all tests passing (count grows over time)
-- [ ] `oracle doctor` shows a `source` row for `claude_code` and a `windows` row for `2`
+- [ ] `oracle doctor` shows a `source` row for `claude_code`, a `data` row (non-zero
+      events if Claude Code has been used recently), and a `windows` row for `2`
 - [ ] `oracle forecast` returns a line or `idle` (no stack trace)
 - [ ] `oracle forecast --json` returns valid JSON with `"schema": 1`
 - [ ] `oracle snapshot` prints a path and the file exists
