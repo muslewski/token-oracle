@@ -33,10 +33,3 @@ def test_load_corrupt_returns_default(tmp_path):
     p = tmp_path / "bad.json"
     p.write_text("{ not json")
     assert C.load_cache(str(p))["files"] == {}
-
-
-def test_collect_and_window():
-    files = {"f": {"events": [[10.0, 1], [50.0, 2], [5.0, 9]]}}
-    assert C.collect_events(files, cutoff=10.0) == [(10.0, 1), (50.0, 2)]
-    cache = {"files": files}
-    assert C.events_from_cache(cache, now=50.0, window=40.0) == [(10.0, 1), (50.0, 2)]

@@ -1,9 +1,4 @@
-from token_oracle.core.contracts import Forecast, UsageEvent, Window, to_pairs
-
-
-def test_usageevent_defaults():
-    e = UsageEvent(timestamp=100.0, tokens=5)
-    assert e.model is None and e.session_id is None and e.kind is None
+from token_oracle.core.contracts import Forecast, Window
 
 
 def test_window_modes():
@@ -16,8 +11,3 @@ def test_window_modes():
 def test_forecast_confidence_default():
     f = Forecast("5h", 10, 100, 12.0, None, 300.0, False)
     assert f.confidence == 1.0
-
-
-def test_to_pairs_sorts():
-    evs = [UsageEvent(3.0, 1), UsageEvent(1.0, 2), UsageEvent(2.0, 3)]
-    assert to_pairs(evs) == [(1.0, 2), (2.0, 3), (3.0, 1)]

@@ -1,15 +1,7 @@
-"""Neutral data contracts shared by sources, core math, and consumers."""
+"""Neutral data contracts shared by core math and consumers. Sources emit bare
+(timestamp, tokens) tuples — see ADAPTERS.md."""
 
 from dataclasses import dataclass
-
-
-@dataclass
-class UsageEvent:
-    timestamp: float  # epoch seconds
-    tokens: int  # billable tokens for this event
-    model: str | None = None
-    session_id: str | None = None
-    kind: str | None = None
 
 
 @dataclass
@@ -38,8 +30,3 @@ class Forecast:
     reset_in_secs: float
     idle: bool
     confidence: float = 1.0
-
-
-def to_pairs(events: list["UsageEvent"]) -> list[tuple[float, int]]:
-    """Sorted (timestamp, tokens) pairs the math operates on."""
-    return sorted((float(e.timestamp), int(e.tokens)) for e in events)

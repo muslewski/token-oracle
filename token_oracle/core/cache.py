@@ -39,17 +39,3 @@ def save_cache(cache, path):
             raise
     except OSError:
         pass
-
-
-def collect_events(files_state, cutoff):
-    out = []
-    for ent in files_state.values():
-        for ts, tok in ent.get("events", []):
-            if ts >= cutoff:
-                out.append((float(ts), int(tok)))
-    out.sort()
-    return out
-
-
-def events_from_cache(cache, now, window):
-    return collect_events(cache.get("files", {}), now - window)
