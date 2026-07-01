@@ -38,6 +38,18 @@ def test_snapshot_writes_file(tmp_path, capsys):
     assert json.load(open(out_path))["schema"] == 1
 
 
+def test_snapshot_exit_one_on_write_failure(tmp_path, capsys):
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 10]], now)
+    (tmp_path / "blocker").write_text("file, not a dir")
+    out_path = str(tmp_path / "blocker" / "snap.json")
+    rc = main(["snapshot", "--config", cfg, "--out", out_path, "--now", str(now)])
+    assert rc == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "write failed" in captured.err
+
+
 def test_doctor_exit_zero(tmp_path):
     now = 100000.0
     cfg = _cfg(tmp_path, [], now)

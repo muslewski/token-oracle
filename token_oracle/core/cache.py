@@ -3,6 +3,7 @@
 
 import json
 import os
+import tempfile
 
 AGGREGATE_INTERVAL = 30  # seconds between heavy re-scans
 
@@ -25,10 +26,17 @@ def save_cache(cache, path):
         d = os.path.dirname(path)
         if d:
             os.makedirs(d, exist_ok=True)
-        tmp = path + ".tmp"
-        with open(tmp, "w", encoding="utf-8") as fh:
-            json.dump(cache, fh)
-        os.replace(tmp, path)
+        fd, tmp = tempfile.mkstemp(dir=d or ".", suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(cache, fh)
+            os.replace(tmp, path)
+        except OSError:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
     except OSError:
         pass
 
