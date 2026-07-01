@@ -93,7 +93,11 @@ def load_config(path: str | None = None) -> "Config":
         except (KeyError, TypeError, ValueError) as e:
             issues.append(f"windows[{i}]: {e} — entry skipped")
 
-    cache_path = os.path.expanduser(raw.get("cache_path") or default_cache_path())
+    raw_cache_path = raw.get("cache_path")
+    if raw_cache_path and not isinstance(raw_cache_path, str):
+        issues.append('config "cache_path" must be a string — using default cache path')
+        raw_cache_path = None
+    cache_path = os.path.expanduser(raw_cache_path or default_cache_path())
     return Config(
         source=raw.get("source", "claude_code"),
         source_opts=raw.get("source_opts", {}),

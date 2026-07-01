@@ -1,4 +1,5 @@
 import json
+import os
 
 from token_oracle.core import config as CFG
 from token_oracle.core.contracts import Window
@@ -128,6 +129,15 @@ def test_valid_config_has_no_issues(tmp_path):
 
     missing = CFG.load_config(str(tmp_path / "none.json"))
     assert missing.issues == []
+
+
+def test_nonstring_cache_path_falls_back_with_issue(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"cache_path": 123}))
+    c = CFG.load_config(str(p))
+    assert c.cache_path == os.path.expanduser(CFG.default_cache_path())
+    assert len(c.issues) == 1
+    assert "cache_path" in c.issues[0]
 
 
 def test_mixed_valid_and_invalid_window_entries(tmp_path):
