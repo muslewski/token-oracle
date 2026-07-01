@@ -24,7 +24,7 @@ pairs. The engine calls `scan()` on each refresh cycle.
 ### Contract
 
 ```python
-from oracle.sources.base import register
+from token_oracle.sources.base import register
 
 @register("my_provider")
 class MyProviderSource:
@@ -56,21 +56,21 @@ class MyProviderSource:
 
 Decorate your class with `@register("name")` before the engine imports it, and
 set `"source": "name"` in `config.json`. The built-in sources register at import
-time by being imported from `oracle.sources`.
+time by being imported from `token_oracle.sources`.
 
 To auto-register a third-party source, import it in your project's entry point
 (or in a `conftest.py` / early startup module) before calling `oracle forecast`.
 
 ### Reference implementation — `generic` source
 
-Copy and adapt `oracle/sources/generic.py` as a starting point:
+Copy and adapt `token_oracle/sources/generic.py` as a starting point:
 
 ```python
-"""oracle/sources/generic.py — copy this to build your own source adapter."""
+"""token_oracle/sources/generic.py — copy this to build your own source adapter."""
 import json
 import os
 
-from oracle.sources.base import register
+from token_oracle.sources.base import register
 
 
 @register("generic")
@@ -179,8 +179,8 @@ For tighter integration (same process, always fresh):
 
 ```python
 import time
-from oracle.core.engine import forecast
-from oracle.core.config import load_config
+from token_oracle.core.engine import forecast
+from token_oracle.core.config import load_config
 
 cfg = load_config()                        # reads ~/.config/token-oracle/config.json
 forecasts = forecast(time.time(), cfg)     # list[Forecast]; never raises
@@ -189,7 +189,7 @@ for f in forecasts:
     print(f.window, f.used, f.cap, f.projected_pct, f.reset_in_secs)
 ```
 
-The `Forecast` dataclass (from `oracle.core.contracts`) has the same fields as
+The `Forecast` dataclass (from `token_oracle.core.contracts`) has the same fields as
 the snapshot `windows` objects above.
 
 `forecast()` never raises — it returns `[]` on hard failure (missing source,
