@@ -1,7 +1,6 @@
 """Stdlib TUI over the Forecast list. render_frame is pure (tested); run() is the
 refresh loop."""
 
-import os
 import time
 
 from ..cli import colors as c
@@ -49,13 +48,13 @@ def render_frame(forecasts, now, color=None):
     return "\n".join(lines)
 
 
-def run(cfg, now):
+def run(cfg):
     try:
         while True:
-            os.system("clear")
             t = time.time()
-            print(render_frame(run_forecast(t, cfg), t))
-            print(c.dim("\n(ctrl-c to quit)", c.color_enabled()))
+            frame = render_frame(run_forecast(t, cfg), t)
+            footer = c.dim("\n(ctrl-c to quit)", c.color_enabled())
+            print("\033[H" + frame + "\n" + footer + "\033[J", end="", flush=True)
             time.sleep(2)
     except KeyboardInterrupt:
         return 0
