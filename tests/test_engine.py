@@ -49,6 +49,58 @@ def test_forecast_warm_cache_replays_generic(tmp_path):
     assert out2[0].idle is False
 
 
+def test_forecast_legacy_cache_events_match_full_events(tmp_path):
+    """A cache file with old 2-element [ts, tok] events must load and forecast
+    to the same numbers as an equivalent cache with full 8-field events —
+    normalize() bridges the gap without a cache rebuild."""
+    now = 100000.0
+    windows = [Window("5h", 1000, 18000)]
+
+    legacy_cache = tmp_path / "legacy.json"
+    legacy_cache.write_text(
+        json.dumps(
+            {
+                "files": {},
+                "lastAggregate": now - 1.0,  # within AGGREGATE_INTERVAL -> warm path
+                "profile": [],
+                "events": [[now - 600.0, 200], [now - 60.0, 50]],
+            }
+        )
+    )
+    cfg_legacy = Config(
+        source="generic",
+        source_opts={"events_path": str(tmp_path / "unused.json")},
+        cache_path=str(legacy_cache),
+        windows=windows,
+    )
+    out_legacy = forecast(now, cfg_legacy)
+
+    full_cache = tmp_path / "full.json"
+    full_cache.write_text(
+        json.dumps(
+            {
+                "files": {},
+                "lastAggregate": now - 1.0,
+                "profile": [],
+                "events": [
+                    [now - 600.0, 200, "claude-sonnet-4-5", 100, 100, 0, 0, None],
+                    [now - 60.0, 50, "claude-sonnet-4-5", 50, 0, 0, 0, None],
+                ],
+            }
+        )
+    )
+    cfg_full = Config(
+        source="generic",
+        source_opts={"events_path": str(tmp_path / "unused.json")},
+        cache_path=str(full_cache),
+        windows=windows,
+    )
+    out_full = forecast(now, cfg_full)
+
+    assert out_legacy == out_full
+    assert out_legacy[0].used == 250
+
+
 def test_forecast_recovers_from_corrupt_cache(tmp_path):
     feed = tmp_path / "feed.json"
     now = 100000.0

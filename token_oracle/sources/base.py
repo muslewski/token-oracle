@@ -1,5 +1,6 @@
-"""Source adapter registry. A source turns provider data into neutral
-(timestamp, tokens) events, owning its own incremental file/cache state."""
+"""Source adapter registry. A source turns provider data into neutral event
+records (see core/events.py); minimally (timestamp, tokens), owning its own
+incremental file/cache state."""
 
 _REGISTRY: dict[str, type] = {}
 

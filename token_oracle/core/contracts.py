@@ -1,5 +1,6 @@
-"""Neutral data contracts shared by core math and consumers. Sources emit bare
-(timestamp, tokens) tuples — see ADAPTERS.md."""
+"""Neutral data contracts shared by core math and consumers. Sources emit
+neutral event records (see core/events.py); minimally bare (timestamp,
+tokens) tuples — see ADAPTERS.md."""
 
 from dataclasses import dataclass
 
