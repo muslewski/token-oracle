@@ -5,6 +5,7 @@ import glob
 import json
 import os
 
+from ..core import events as events_mod
 from ..core.timeutil import parse_ts
 from .base import register
 
@@ -20,7 +21,10 @@ def _limit_tokens(usage):
 
 
 def iter_usage_events(jsonl_path):
-    """Yield (ts_epoch, tokens) for assistant messages carrying usage."""
+    """Yield (ts_epoch, tokens, model, input, output, cache_create, cache_read,
+    cost_usd) for assistant messages carrying usage. tokens (element 1) stays
+    limit-weighted (input+output+cache_creation; cache_read excluded) — the
+    forecast math only ever reads elements 0-1."""
     try:
         fh = open(jsonl_path, "rb")
     except OSError:
@@ -34,7 +38,8 @@ def iter_usage_events(jsonl_path):
                 obj = json.loads(raw)
             except ValueError:
                 continue
-            usage = (obj.get("message") or {}).get("usage")
+            msg = obj.get("message") or {}
+            usage = msg.get("usage")
             if not usage:
                 continue
             ts = parse_ts(obj.get("timestamp"))
@@ -42,7 +47,13 @@ def iter_usage_events(jsonl_path):
                 continue
             tok = _limit_tokens(usage)
             if tok > 0:
-                yield (ts, tok)
+                model = msg.get("model")
+                inp = usage.get("input_tokens", 0)
+                out = usage.get("output_tokens", 0)
+                cc = usage.get("cache_creation_input_tokens", 0)
+                cr = usage.get("cache_read_input_tokens", 0)
+                cost = obj.get("costUSD")
+                yield (ts, tok, model, inp, out, cc, cr, cost)
 
 
 @register("claude_code")
@@ -70,14 +81,14 @@ class ClaudeCodeSource:
             ent = files.get(p)
             if ent and ent.get("mtime") == st.st_mtime and ent.get("size") == st.st_size:
                 continue
-            evs = [[ts, tok] for ts, tok in iter_usage_events(p) if ts >= cutoff]
+            evs = [list(e) for e in iter_usage_events(p) if e[0] >= cutoff]
             files[p] = {"mtime": st.st_mtime, "size": st.st_size, "events": evs}
         for gone in [p for p in files if p not in seen]:
             files.pop(gone, None)
         out = []
         for ent in files.values():
             out.extend(
-                (float(ts), int(tok)) for ts, tok in ent.get("events", []) if cutoff <= ts <= now
+                events_mod.normalize(e) for e in ent.get("events", []) if cutoff <= e[0] <= now
             )
-        out.sort()
+        out.sort(key=lambda e: e[0])
         return files, out

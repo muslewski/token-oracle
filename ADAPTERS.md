@@ -18,8 +18,35 @@ Two adapter interfaces let external code plug into token-oracle:
 
 ## Source interface
 
-A source adapter turns provider-specific data into neutral `(timestamp, tokens)`
-pairs. The engine calls `scan()` on each refresh cycle.
+A source adapter turns provider-specific data into neutral event records. The
+engine calls `scan()` on each refresh cycle.
+
+### Event shape
+
+An event is a 2–8 field array (tuple in memory):
+
+```
+[ts, tokens, model, input, output, cache_create, cache_read, cost_usd]
+ 0    1       2      3      4       5             6           7
+```
+
+| Field | Type | Description |
+|---|---|---|
+| `ts` | float | Epoch seconds |
+| `tokens` | int | Limit-weighted token count (what the forecast math sums) |
+| `model` | string or null | Model name, when known |
+| `input` | int | Input token count (0 when absent) |
+| `output` | int | Output token count (0 when absent) |
+| `cache_create` | int | Cache-creation input tokens (0 when absent) |
+| `cache_read` | int | Cache-read input tokens (0 when absent) |
+| `cost_usd` | float or null | Reported USD cost, when known |
+
+**Fields 0–1 are the only ones the forecast math reads** (see
+`token_oracle/core/events.py`, `as_pairs`). A bare `[ts, tokens]` pair — the
+original, minimal contract — remains valid forever; `core/events.py`'s
+`normalize()` pads any 2–8 element sequence out to the full 8-tuple with
+`None`/`0` defaults. Sources, the cache, and the engine all normalize through
+this module, so a source may emit either shape.
 
 ### Contract
 
@@ -37,7 +64,7 @@ class MyProviderSource:
         files_state: dict,
         now: float,
         window: float,
-    ) -> tuple[dict, list[tuple[float, int]]]:
+    ) -> tuple[dict, list[tuple]]:
         """
         Return (updated_files_state, events).
 
@@ -46,8 +73,8 @@ class MyProviderSource:
         now          — current epoch seconds (float).
         window       — look-back horizon in seconds; return only events in
                        [now - window, now].
-        events       — list of (epoch_seconds, token_count) pairs, sorted
-                       ascending by timestamp.
+        events       — list of 2-8 field event records (see "Event shape"
+                       above), sorted ascending by timestamp (field 0).
         """
         ...
 ```
@@ -70,6 +97,7 @@ Copy and adapt `token_oracle/sources/generic.py` as a starting point:
 import json
 import os
 
+from token_oracle.core import events as events_mod
 from token_oracle.sources.base import register
 
 
@@ -84,18 +112,18 @@ class GenericSource:
         try:
             with open(self.events_path, encoding="utf-8") as fh:
                 data = json.load(fh)
-            for ts, tok in data:
-                ts = float(ts)
-                if cutoff <= ts <= now:
-                    out.append((ts, int(tok)))
+            for row in data:
+                if cutoff <= float(row[0]) <= now:
+                    out.append(events_mod.normalize(row))
         except (OSError, ValueError, TypeError):
             pass
-        out.sort()
+        out.sort(key=lambda e: e[0])
         return files_state, out
 ```
 
 The `generic` source expects a JSON file at `source_opts["events_path"]`
-containing an array of `[timestamp_epoch, token_count]` pairs:
+containing an array of rows, each a `[timestamp_epoch, token_count]` pair or
+a longer event record (see "Event shape" above):
 
 ```json
 [

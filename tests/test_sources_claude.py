@@ -5,19 +5,20 @@ from token_oracle.sources.base import available, get_source
 from token_oracle.sources.claude_code import iter_usage_events
 
 
-def _line(ts, inp, out, cc):
-    return json.dumps(
-        {
-            "timestamp": ts,
-            "message": {
-                "usage": {
-                    "input_tokens": inp,
-                    "output_tokens": out,
-                    "cache_creation_input_tokens": cc,
-                }
-            },
-        }
-    )
+def _line(ts, inp, out, cc, cr=0, model="claude-sonnet-4-5", cost=None):
+    msg = {
+        "usage": {
+            "input_tokens": inp,
+            "output_tokens": out,
+            "cache_creation_input_tokens": cc,
+            "cache_read_input_tokens": cr,
+        },
+        "model": model,
+    }
+    obj = {"timestamp": ts, "message": msg}
+    if cost is not None:
+        obj["costUSD"] = cost
+    return json.dumps(obj)
 
 
 def test_claude_registered():
@@ -29,14 +30,18 @@ def test_iter_usage_events(tmp_path):
     p.write_text(
         "\n".join(
             [
-                _line("1970-01-01T01:00:00Z", 100, 50, 10),  # 160 tokens
+                _line(
+                    "1970-01-01T01:00:00Z", 100, 50, 10, cr=5, cost=0.02
+                ),  # 160 tokens (cache_read excluded from the limit sum)
                 "garbage-not-json",
                 json.dumps({"timestamp": "1970-01-01T02:00:00Z"}),  # no usage -> skip
             ]
         )
     )
     evs = list(iter_usage_events(str(p)))
-    assert evs == [(3600.0, 160)]
+    assert evs == [(3600.0, 160, "claude-sonnet-4-5", 100, 50, 10, 5, 0.02)]
+    # element 1 (the limit-weighted sum) excludes cache_read_input_tokens
+    assert evs[0][1] == 100 + 50 + 10
 
 
 def test_source_scan_collects_within_window(tmp_path):
@@ -45,7 +50,7 @@ def test_source_scan_collects_within_window(tmp_path):
     (proj / "a.jsonl").write_text(_line("1970-01-01T01:00:00Z", 100, 0, 0))
     src = get_source("claude_code", {"projects_dir": str(tmp_path / "projects")})
     files, events = src.scan({}, now=7200.0, window=7200.0)
-    assert events == [(3600.0, 100)]
+    assert events == [(3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None)]
     assert any("a.jsonl" in k for k in files)
 
 
@@ -66,9 +71,9 @@ def test_source_scan_excludes_future_events(tmp_path):
     src = get_source("claude_code", {"projects_dir": str(tmp_path / "projects")})
     now = 7200.0
     _, events = src.scan({}, now=now, window=7200.0)
-    tss = [ts for ts, _ in events]
+    tss = [e[0] for e in events]
     assert all(ts <= now for ts in tss), f"future event leaked: {tss}"
-    assert (3600.0, 50) in events
+    assert (3600.0, 50, "claude-sonnet-4-5", 50, 0, 0, 0, None) in events
 
 
 def test_scan_skips_unchanged_files_via_state(tmp_path):
@@ -80,7 +85,7 @@ def test_scan_skips_unchanged_files_via_state(tmp_path):
     now = 7200.0
     window = 7200.0
     files1, events1 = src.scan({}, now=now, window=window)
-    assert events1 == [(3600.0, 100)]
+    assert events1 == [(3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None)]
 
     st_before = os.stat(p)
     mtime_before, atime_before = st_before.st_mtime, st_before.st_atime
@@ -97,7 +102,7 @@ def test_scan_skips_unchanged_files_via_state(tmp_path):
 
     _, events2 = src.scan(files1, now=now, window=window)
     # Cache hit proven: same mtime+size => no re-parse => still the old value.
-    assert events2 == [(3600.0, 100)]
+    assert events2 == [(3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None)]
 
 
 def test_scan_reparses_on_size_change(tmp_path):
@@ -109,14 +114,14 @@ def test_scan_reparses_on_size_change(tmp_path):
     now = 7200.0
     window = 7200.0
     files1, events1 = src.scan({}, now=now, window=window)
-    assert events1 == [(3600.0, 100)]
+    assert events1 == [(3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None)]
 
     with open(p, "a") as fh:
         fh.write("\n" + _line("1970-01-01T01:30:00Z", 50, 0, 0))
 
     _, events2 = src.scan(files1, now=now, window=window)
-    assert (3600.0, 100) in events2
-    assert (5400.0, 50) in events2
+    assert (3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None) in events2
+    assert (5400.0, 50, "claude-sonnet-4-5", 50, 0, 0, 0, None) in events2
     assert len(events2) == 2
 
 
@@ -129,7 +134,7 @@ def test_scan_prunes_deleted_files(tmp_path):
     now = 7200.0
     window = 7200.0
     files1, events1 = src.scan({}, now=now, window=window)
-    assert events1 == [(3600.0, 100)]
+    assert events1 == [(3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None)]
 
     os.remove(p)
     files2, events2 = src.scan(files1, now=now, window=window)
