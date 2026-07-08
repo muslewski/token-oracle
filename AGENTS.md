@@ -70,11 +70,18 @@ process exit code is `0` only when every row is `✓`.
 ## Step 4 — Configure windows (or accept the default)
 
 The default `max20` preset works for Claude Pro / max20 subscriptions with no
-config file needed. To customise, write `~/.config/token-oracle/config.json`:
+config file needed. To customise, run `token-oracle init` to write a starter
+config at `~/.config/token-oracle/config.json` (non-clobbering — pass
+`--force` to overwrite an existing file), then edit it:
 
 ```bash
-mkdir -p ~/.config/token-oracle
-cat > ~/.config/token-oracle/config.json << 'EOF'
+token-oracle init
+```
+
+This writes the `max20` preset, which looks like this — edit the file to
+adjust windows or source:
+
+```json
 {
   "source": "claude_code",
   "windows": [
@@ -82,7 +89,6 @@ cat > ~/.config/token-oracle/config.json << 'EOF'
     {"name": "weekly", "cap": 8000000, "period_secs": 604800}
   ]
 }
-EOF
 ```
 
 Re-run `oracle doctor` to confirm the config file is now loaded:

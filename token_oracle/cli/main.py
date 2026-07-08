@@ -9,11 +9,11 @@ import time
 from ..adapters import statusline as sl
 from ..adapters import tmux as tx
 from ..cli import colors
-from ..core.config import default_config_path, load_config
+from ..core.config import PRESETS, default_config_path, load_config, write_default_config
 from ..core.engine import forecast as run_forecast
 from ..core.profile import HIST_SECS
 from ..core.timeutil import fmt_dur
-from ..snapshot.writer import build_snapshot, write_snapshot
+from ..snapshot.writer import build_snapshot, default_snapshot_path, write_snapshot
 from ..sources.base import available, get_source
 
 
@@ -98,17 +98,50 @@ def _doctor_lines(cfg, config_path, color, now):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="token-oracle")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("forecast", "snapshot", "statusline", "tmux", "doctor", "dash"):
+    for name in ("forecast", "snapshot", "statusline", "tmux", "doctor", "dash", "init", "clean"):
         sp = sub.add_parser(name)
         _add_common(sp)
         if name == "forecast":
             sp.add_argument("--json", action="store_true")
         if name == "snapshot":
             sp.add_argument("--out", default=None)
+        if name == "init":
+            sp.add_argument("--preset", default="max20", choices=sorted(PRESETS))
+            sp.add_argument("--force", action="store_true")
+        if name == "clean":
+            sp.add_argument("--yes", action="store_true")
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     now = _now(args)
 
+    if args.cmd == "init":
+        target = os.path.expanduser(args.config or default_config_path())
+        existed = os.path.exists(target)
+        path = write_default_config(target, preset=args.preset, force=args.force)
+        if existed and not args.force:
+            print(f"{path} exists — pass --force to overwrite")
+        else:
+            print(path)
+        return 0
+    if args.cmd == "clean":
+        targets = [
+            os.path.expanduser(args.config or default_config_path()),
+            cfg.cache_path,
+            default_snapshot_path(),
+        ]
+        if not args.yes:
+            print("would remove:")
+            for t in targets:
+                print(f"  {t}")
+            print("re-run with --yes to delete")
+            return 1
+        for t in targets:
+            try:
+                os.remove(t)
+                print(f"removed {t}")
+            except OSError:
+                pass
+        return 0
     if args.cmd == "forecast":
         fs = run_forecast(now, cfg)
         if args.json:

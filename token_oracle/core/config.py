@@ -105,3 +105,15 @@ def load_config(path: str | None = None) -> "Config":
         windows=windows,
         issues=issues,
     )
+
+
+def write_default_config(path=None, preset="max20", force=False) -> str:
+    path = os.path.expanduser(path or default_config_path())
+    if os.path.exists(path) and not force:
+        return path
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(PRESETS[preset], fh, indent=2)
+    return path

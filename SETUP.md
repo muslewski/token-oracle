@@ -67,6 +67,11 @@ for f in forecasts:
 
 ## Configuration
 
+Run `token-oracle init` to write a starter config at the default location
+(non-clobbering — pass `--force` to overwrite, or `--config FILE` for a
+custom path). Edit the resulting file to customize sources or windows; the
+format is documented below.
+
 ### File location
 
 Default: `~/.config/token-oracle/config.json`  
