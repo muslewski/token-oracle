@@ -50,26 +50,30 @@ All subcommands accept `--config FILE` (default: `~/.config/token-oracle/config.
 
 | Subcommand | Extra flags | Description |
 |------------|-------------|-------------|
+| `init` | `--preset`, `--force` | Write a starter config (non-clobbering) |
 | `forecast` | `--json` | Print forecast (default: statusline format) |
 | `snapshot` | `--out FILE` | Write snapshot JSON to a file, print the path |
 | `statusline` | — | Emit plain-text/ANSI statusline fragment |
 | `tmux` | — | Emit tmux `status-right` fragment |
 | `doctor` | — | Check configuration and data sources |
 | `dash` | — | Launch full-screen TUI dashboard |
+| `clean` | `--yes` | Remove config, cache, and snapshot files |
 
 Full reference: `token-oracle <subcommand> --help`
 
 ## CLI reference
 
 ```
-token-oracle {forecast,snapshot,statusline,tmux,doctor,dash} [OPTIONS]
+token-oracle {forecast,snapshot,statusline,tmux,doctor,dash,init,clean} [OPTIONS]
 
+token-oracle init       [--config FILE] [--preset NAME] [--force]
 token-oracle forecast   [--config FILE] [--json]
 token-oracle snapshot   [--config FILE] [--out FILE]
 token-oracle statusline [--config FILE]
 token-oracle tmux       [--config FILE]
 token-oracle doctor     [--config FILE]
 token-oracle dash       [--config FILE]
+token-oracle clean      [--config FILE] [--yes]
 ```
 
 ## Adapters

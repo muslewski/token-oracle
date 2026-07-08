@@ -1,4 +1,5 @@
 import json
+import os
 
 from token_oracle.cli.main import main
 
@@ -152,3 +153,67 @@ def test_doctor_corrupt_cache_flagged(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "corrupt" in out
     assert rc == 1
+
+
+def test_init_writes_config(tmp_path, capsys):
+    cfg_path = str(tmp_path / "c.json")
+    assert main(["init", "--config", cfg_path]) == 0
+    assert os.path.exists(cfg_path)
+    data = json.load(open(cfg_path))
+    assert {w["name"] for w in data["windows"]} == {"5h", "weekly"}
+    out = capsys.readouterr().out
+    assert cfg_path in out
+
+
+def test_init_no_clobber(tmp_path, capsys):
+    cfg_path = tmp_path / "c.json"
+    cfg_path.write_text(json.dumps({"source": "custom"}))
+
+    rc = main(["init", "--config", str(cfg_path)])
+    assert rc == 0
+    assert json.loads(cfg_path.read_text()) == {"source": "custom"}
+    out = capsys.readouterr().out
+    assert "--force" in out
+
+    rc = main(["init", "--config", str(cfg_path), "--force"])
+    assert rc == 0
+    assert "windows" in json.loads(cfg_path.read_text())
+
+
+def test_clean_requires_yes(tmp_path, capsys, monkeypatch):
+    # Isolate cache/snapshot resolution to tmp_path so nothing real is touched.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    cfg_path = str(tmp_path / "c.json")
+    main(["init", "--config", cfg_path])
+    capsys.readouterr()
+
+    rc = main(["clean", "--config", cfg_path])
+    assert rc == 1
+    assert os.path.exists(cfg_path)
+    out = capsys.readouterr().out
+    assert cfg_path in out
+
+
+def test_clean_yes_removes(tmp_path, monkeypatch):
+    # Isolate cache/snapshot resolution to tmp_path so real user data is never removed.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    cfg_path = str(tmp_path / "c.json")
+    main(["init", "--config", cfg_path])
+
+    # Create dummy cache + snapshot under the isolated data dir so removal is exercised.
+    data_dir = tmp_path / "token-oracle"
+    os.makedirs(data_dir, exist_ok=True)
+    cache_path = data_dir / "cache.json"
+    snapshot_path = data_dir / "forecast.json"
+    cache_path.write_text("{}")
+    snapshot_path.write_text("{}")
+
+    rc = main(["clean", "--config", cfg_path, "--yes"])
+    assert rc == 0
+    assert not os.path.exists(cfg_path)
+    assert not cache_path.exists()
+    assert not snapshot_path.exists()
+
+    # All three already absent → still exits 0, no exception (silently skipped).
+    rc = main(["clean", "--config", cfg_path, "--yes"])
+    assert rc == 0
