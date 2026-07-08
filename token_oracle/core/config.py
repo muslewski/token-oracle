@@ -10,6 +10,20 @@ from .contracts import Window
 from .timeutil import parse_ts
 
 PRESETS = {
+    "pro": {
+        "source": "claude_code",
+        "windows": [
+            {"name": "5h", "cap": 19000, "period_secs": 18000},
+            {"name": "weekly", "cap": 700000, "period_secs": 604800, "anchor": None},
+        ],
+    },
+    "max5": {
+        "source": "claude_code",
+        "windows": [
+            {"name": "5h", "cap": 88000, "period_secs": 18000},
+            {"name": "weekly", "cap": 3200000, "period_secs": 604800, "anchor": None},
+        ],
+    },
     "max20": {
         "source": "claude_code",
         "windows": [
@@ -19,6 +33,8 @@ PRESETS = {
     },
 }
 
+_COST_MODES = ("auto", "calculate", "display", "off")
+
 
 @dataclass
 class Config:
@@ -27,6 +43,9 @@ class Config:
     cache_path: str = ""
     windows: list[Window] = field(default_factory=list)
     issues: list[str] = field(default_factory=list)
+    plan: str = "max20"
+    cost_mode: str = "auto"
+    pricing: dict = field(default_factory=dict)
 
 
 def _xdg(env, default_tail):
@@ -67,24 +86,40 @@ def _window_from_dict(d) -> Window:
 
 def load_config(path: str | None = None) -> "Config":
     path = path or default_config_path()
-    raw: dict[str, Any] = dict(PRESETS["max20"])
     issues: list[str] = []
     expanded_path = os.path.expanduser(path)
+    data: dict[str, Any] | None = None
     if os.path.exists(expanded_path):
         try:
             with open(expanded_path, encoding="utf-8") as fh:
-                data = json.load(fh)
-            if isinstance(data, dict):
-                raw.update(data)
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                data = loaded
         except (OSError, ValueError):
             issues.append(
                 f"config file {path} is unreadable or not valid JSON — using built-in max20 preset"
             )
 
+    # raw = max20 defaults ∪ chosen plan preset ∪ explicit file keys (file
+    # keys always win — same "last update wins" rule as before plan support).
+    raw: dict[str, Any] = dict(PRESETS["max20"])
+    plan = data.get("plan") if data else None
+    if plan is not None:
+        if isinstance(plan, str) and plan in PRESETS:
+            raw.update(PRESETS[plan])
+        else:
+            issues.append(f'config "plan" {plan!r} is unknown — using built-in max20 preset')
+            plan = "max20"
+    else:
+        plan = "max20"
+    preset_windows = raw.get("windows", PRESETS["max20"]["windows"])
+    if data:
+        raw.update(data)
+
     raw_windows = raw.get("windows", [])
     if not isinstance(raw_windows, list):
         issues.append('config "windows" must be a list — using built-in max20 preset windows')
-        raw_windows = PRESETS["max20"]["windows"]
+        raw_windows = preset_windows
 
     windows: list[Window] = []
     for i, w in enumerate(raw_windows):
@@ -98,12 +133,26 @@ def load_config(path: str | None = None) -> "Config":
         issues.append('config "cache_path" must be a string — using default cache path')
         raw_cache_path = None
     cache_path = os.path.expanduser(raw_cache_path or default_cache_path())
+
+    cost_mode = raw.get("cost_mode", "auto")
+    if cost_mode not in _COST_MODES:
+        issues.append(f'config "cost_mode" {cost_mode!r} is invalid — using "auto"')
+        cost_mode = "auto"
+
+    pricing = raw.get("pricing", {})
+    if not isinstance(pricing, dict):
+        issues.append('config "pricing" must be an object — ignoring')
+        pricing = {}
+
     return Config(
         source=raw.get("source", "claude_code"),
         source_opts=raw.get("source_opts", {}),
         cache_path=cache_path,
         windows=windows,
         issues=issues,
+        plan=plan,
+        cost_mode=cost_mode,
+        pricing=pricing,
     )
 
 

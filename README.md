@@ -35,7 +35,7 @@ Run `token-oracle --help` to list all subcommands.
 
 ## How it works
 
-token-oracle reads your provider's local usage logs, computes an observed token-consumption rate over a configurable sliding window, and estimates how long you have before you exhaust your current allowance or hit your plan cap. No provider API calls — purely offline inference from log files already on your machine.
+token-oracle reads your provider's local usage logs, computes an observed token-consumption rate over a configurable sliding window, and estimates how long you have before you exhaust your current allowance or hit your plan cap. No provider API calls — purely offline inference from log files already on your machine. Ships with `pro`/`max5`/`max20` plan presets and an offline USD pricing snapshot for cost estimates, both user-overridable via `plan`, `cost_mode`, and `pricing` config keys.
 
 Supported sources:
 

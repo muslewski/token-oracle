@@ -156,3 +156,90 @@ def test_mixed_valid_and_invalid_window_entries(tmp_path):
     assert [w.name for w in c.windows] == ["ok"]
     assert len(c.issues) == 1
     assert "windows[1]" in c.issues[0]
+
+
+def test_plan_pro_yields_19000_cap(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"plan": "pro"}))
+    c = CFG.load_config(str(p))
+    assert c.plan == "pro"
+    five = next(w for w in c.windows if w.name == "5h")
+    assert five.cap == 19000
+    assert c.issues == []
+
+
+def test_plan_max5_yields_88000_cap(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"plan": "max5"}))
+    c = CFG.load_config(str(p))
+    assert c.plan == "max5"
+    five = next(w for w in c.windows if w.name == "5h")
+    assert five.cap == 88000
+
+
+def test_unknown_plan_falls_back_to_max20_with_issue(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"plan": "ultra-mega"}))
+    c = CFG.load_config(str(p))
+    assert c.plan == "max20"
+    five = next(w for w in c.windows if w.name == "5h")
+    assert five.cap == 220000
+    assert len(c.issues) == 1
+    assert "plan" in c.issues[0]
+
+
+def test_file_windows_override_chosen_plan_windows(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(
+        json.dumps(
+            {
+                "plan": "pro",
+                "windows": [{"name": "custom", "cap": 42, "period_secs": 60}],
+            }
+        )
+    )
+    c = CFG.load_config(str(p))
+    assert c.plan == "pro"
+    assert [w.name for w in c.windows] == ["custom"]
+    assert c.windows[0].cap == 42
+
+
+def test_bad_cost_mode_falls_back_to_auto_with_issue(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"cost_mode": "bogus"}))
+    c = CFG.load_config(str(p))
+    assert c.cost_mode == "auto"
+    assert len(c.issues) == 1
+    assert "cost_mode" in c.issues[0]
+
+
+def test_valid_cost_mode_is_kept(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"cost_mode": "display"}))
+    c = CFG.load_config(str(p))
+    assert c.cost_mode == "display"
+    assert c.issues == []
+
+
+def test_pricing_non_dict_falls_back_to_empty_with_issue(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"pricing": ["not", "a", "dict"]}))
+    c = CFG.load_config(str(p))
+    assert c.pricing == {}
+    assert len(c.issues) == 1
+    assert "pricing" in c.issues[0]
+
+
+def test_pricing_dict_is_kept(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"pricing": {"my-model": {"input": 1.0, "output": 2.0}}}))
+    c = CFG.load_config(str(p))
+    assert c.pricing == {"my-model": {"input": 1.0, "output": 2.0}}
+    assert c.issues == []
+
+
+def test_default_plan_and_cost_mode_when_missing(tmp_path):
+    c = CFG.load_config(str(tmp_path / "none.json"))
+    assert c.plan == "max20"
+    assert c.cost_mode == "auto"
+    assert c.pricing == {}

@@ -107,6 +107,9 @@ built-in `max20` preset above is used.
 | `source_opts` | object | `{}` | Options passed to the source adapter |
 | `cache_path` | string | XDG data dir | Path to the rolling event cache |
 | `windows` | array | `max20` preset | List of forecast windows |
+| `plan` | string | `"max20"` | Named plan preset (`pro`, `max5`, `max20`) supplying default `windows`; unknown names fall back to `max20` with a reported issue |
+| `cost_mode` | string | `"auto"` | Cost computation mode: `"auto"` (use recorded cost when present, else calculate), `"calculate"` (always calculate from token counts), `"display"` (only ever use recorded cost), or `"off"` (cost tracking disabled) |
+| `pricing` | object | `{}` | Per-model-prefix USD-per-million-token overrides (same shape as the built-in snapshot in `core/pricing.py`); these win over the built-in snapshot |
 
 ### Window object
 
@@ -124,6 +127,20 @@ rolling block behavior.
 **Fixed-grid mode** (`anchor` set to an ISO 8601 string, e.g. `"2026-01-05T00:00:00Z"`):
 window starts at `anchor + n * period_secs`. Useful for weekly/monthly caps that
 reset on a known calendar boundary.
+
+### Plan presets
+
+Set `"plan"` in your config (or `token-oracle init --preset NAME`) to start
+from one of the built-in caps instead of writing `windows` by hand:
+
+| Preset | 5h cap | Weekly cap |
+|---|---|---|
+| `pro` | 19,000 | 700,000 |
+| `max5` | 88,000 | 3,200,000 |
+| `max20` | 220,000 | 8,000,000 |
+
+5h caps follow Claude-Code-Usage-Monitor's published approximations; weekly
+caps are proportional estimates — override `windows` for exact values.
 
 ### Example — Claude max20 preset (default)
 
