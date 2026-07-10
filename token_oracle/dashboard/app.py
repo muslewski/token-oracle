@@ -8,20 +8,23 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 
 from ..cli import colors as c
 from ..core.engine import detect_resets
 from ..core.engine import forecast as run_forecast
 from ..core.timeutil import fmt_dh_long, fmt_reset, fmt_tokens
-from ..live import web as lw
 from ..live.contract import (
     STATE_AUTH_NO_DATA,
+    STATE_ERROR,
     STATE_NEEDS_LOGIN,
     STATE_RATE_DATA_ONLY,
     STATE_STALE,
+    STATE_UNAVAILABLE,
 )
-from ..live.overlay import overlay_cells
+from ..live.overlay import overlay_cells, rate_info
 from ..live.store import load_snapshot
+from .scene import Painter, Region, Scene
 
 BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
 
@@ -47,9 +50,59 @@ def _fmt_reset_abs(reset_in, now):
     return fmt_reset(reset_in)
 
 
-def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, width=66):
-    """Render a nice boxed panel. Prioritize: BIG BOLD % + progress bar + 'resets in Xm'.
-    Used numbers and source labels are secondary (dim). Clean, no duplicate titles."""
+# Fixed-height layout (plan 034): heights depend ONLY on config shape (#windows per profile),
+# never on idle/active state or presence of live data. Every window row is exactly 3 lines.
+HEADER_H = 2
+ALERT_H = 1
+ACTIVITY_H = 3
+FOOTER_H = 1
+
+
+def _panel_block_height(n_windows: int) -> int:
+    """Top + bottom + exactly 3 lines per window (head/meta/provenance)."""
+    n = max(1, int(n_windows or 1))
+    return 2 + 3 * n
+
+
+def panel_height(groups: dict) -> int:
+    """Compute the panels region height for the current groups shape.
+
+    Side-by-side when exactly two profiles with equal window counts: use the
+    block height of one (shorter is padded in render). Stacked otherwise.
+    The value is independent of per-frame data content.
+    """
+    if not groups:
+        return _panel_block_height(1)  # (no data) padded block
+    pnames = list(groups.keys())
+    if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
+        n = len(groups[pnames[0]])
+        return _panel_block_height(n)
+    total = 0
+    for _pn, fs in groups.items():
+        n = len(fs) or 1
+        total += _panel_block_height(n)
+        total += 1  # inter-block gap line
+    return total
+
+
+def _row_glyph(cell, is_idle: bool) -> str:
+    """Glyph encoding provenance origin for the head line (per plan 034 3-line contract)."""
+    if is_idle:
+        return "–"
+    if cell is not None and getattr(cell, "pct", None) is not None:
+        return "●"
+    return "◌"
+
+
+def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
+    """Render a boxed panel using fixed 3-line rows (head/meta/provenance).
+
+    Every window (idle or active) contributes exactly 3 lines after top/bot.
+    The displayed % is live (from cell.pct) when available, else local projection.
+    Glyphs: ● live, ◌ local projection, – idle.
+    Meta and provenance explicitly distinguish live vs local; "live"/"real data"
+    wording only appears for rows where cell.pct is not None.
+    """
     icon = _profile_icon(pname)
     title = f"{icon} {pname.upper()}"
     if "grok" in pname.lower():
@@ -58,61 +111,20 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
         title += "  Max20x + cloud"
     lines = [c.violet(c.box_top(title, width, enabled), enabled)]
     if not forecasts:
+        # (no data) block padded to exactly 3 lines for height invariance
         lines.append(c.box_line(c.dim("(no data)", enabled), width, enabled))
+        lines.append(c.box_line(c.dim("", enabled), width, enabled))
+        lines.append(c.box_line(c.dim("", enabled), width, enabled))
         lines.append(c.box_bot(width, enabled))
         return lines
-
-    # Use top-level st (from single get_live_status) to avoid redundant work and
-    # to know if a live attempt happened even if this window has no pct data yet.
-    st = st or {}
-    top_live_attempted = bool(st.get("last_attempt"))
 
     cells = cells or {}
     p_canon = "grok" if "grok" in pname.lower() else "claude"
 
     for f in sorted(forecasts, key=lambda x: x.window):
         wname = f.window
-        if f.idle:
-            is_5h = (
-                "5h" in wname.lower() or "session" in wname.lower() or "current" in wname.lower()
-            )
-            cell = cells.get((p_canon, "5h"))
-            if is_5h and cell and cell.state_value == "starts_on_first_message":
-                # ONLY show website phrasing for medium+ state; no fabricate from local.
-                bar = _bar(0.0, enabled, BAR_W)
-                head = f"{c.M_BULLET} {wname:<6}  0% {bar} starts when a message is sent"
-                lines.append(c.box_line(head, width, enabled))
-                meta = "   (5h window activates on first use; resets 5h later)"
-                lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
-                age = int(cell.age_secs) if cell and cell.age_secs is not None else 0
-                prov5 = (
-                    f"5h — live from claude.ai ({age}s ago)" if age else "5h — live from claude.ai"
-                )
-                lines.append(c.box_line(c.dim("   " + prov5, enabled), width, enabled))
-            elif is_5h:
-                # Honest local state: we don't know the exact server message yet.
-                line = (
-                    f"{c.M_BULLET} {wname:<6} idle  resets {_fmt_reset_abs(f.reset_in_secs, now)}"
-                )
-                lines.append(c.box_line(c.dim(line, enabled), width, enabled))
-                lines.append(
-                    c.box_line(
-                        c.dim(
-                            "   5h — no recent activity (live web gives exact after login)",
-                            enabled,
-                        ),
-                        width,
-                        enabled,
-                    )
-                )
-            else:
-                line = (
-                    f"{c.M_BULLET} {wname:<6} idle  resets {_fmt_reset_abs(f.reset_in_secs, now)}"
-                )
-                lines.append(c.box_line(c.dim(line, enabled), width, enabled))
-            continue
-        # Derive primary display pct + provenance ONLY from cell (plan 030 contract).
-        # Never recompute used from a live pct here.
+        is_idle = bool(getattr(f, "idle", False))
+        is_5h = "5h" in wname.lower() or "session" in wname.lower() or "current" in wname.lower()
         wkey = None
         ww = (wname or "").lower()
         if ww in ("weekly", "week"):
@@ -122,6 +134,38 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
         elif ww in ("5h", "5-hour", "session", "current"):
             wkey = "5h"
         cell = cells.get((p_canon, wkey)) if wkey else None
+
+        glyph = _row_glyph(cell, is_idle)
+
+        if is_idle:
+            # idle head: always show idle + reset (even 5h); special state_value only
+            # affects meta/provenance
+            reset_str = _fmt_reset_abs(f.reset_in_secs, now)
+            head = f"{glyph} {wname:<6} idle  resets {reset_str}"
+            lines.append(c.box_line(head, width, enabled))
+
+            if is_5h and cell and cell.state_value == "starts_on_first_message":
+                # ONLY website phrasing when the cell carries the state (plan 034 + 030)
+                meta = "   (5h window activates on first use; resets 5h later)"
+                lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
+                age = int(cell.age_secs) if getattr(cell, "age_secs", None) is not None else 0
+                # avoid "live" wording when this row does not carry a live pct number
+                # (0% placeholder)
+                prov = f"5h — from claude.ai ({age}s ago)" if age else "5h — from claude.ai"
+                lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
+            elif is_5h:
+                meta = "   5h — no recent activity (live web gives exact after login)"
+                lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
+                prov = "local projection — no reliable live data (unavailable)"
+                lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
+            else:
+                # blank meta + honest local prov for ordinary idle windows
+                lines.append(c.box_line(c.dim("", enabled), width, enabled))
+                prov = "local projection — live disabled"
+                lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
+            continue
+
+        # active (or non-idle) row: display_pct prefers live cell.pct when present
         if cell and cell.pct is not None:
             display_pct = cell.pct
         else:
@@ -129,7 +173,6 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
 
         bar = _bar(display_pct, enabled, BAR_W)
         pct_num = f"{round(display_pct):3d}%"
-        # Key windows get BOLD % as requested: SuperGrok weekly, Claude weekly cloud, Fable
         is_key = (wname.lower() in ("weekly", "fable")) and (
             ("grok" in pname.lower() and wname.lower() == "weekly")
             or (pname.lower() in ("claude", "default") and wname.lower() in ("weekly", "fable"))
@@ -138,274 +181,183 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
         if (is_key or wname.lower() in ("5h", "session")) and enabled:
             pct_str = f"\033[1m{pct_str}\033[0m"
 
-        # PROMINENT first line: window  **XX%**  [bar]   resets in Xm
         reset_str = _fmt_reset_abs(f.reset_in_secs, now)
-        # Compact prominent: % bar reset-time all on the main visible line
-        head = f"{c.M_BULLET} {wname:<6} {pct_str} {bar} {reset_str}"
+        head = f"{glyph} {wname:<6} {pct_str} {bar} {reset_str}"
         lines.append(c.box_line(head, width, enabled))
 
-        # secondary (dim): tokens + optional ETA (always from local f)
+        # meta: always local tokens; when live shown, also show the distinct local proj
         used_str = f"{fmt_tokens(f.used)}/{fmt_tokens(f.cap)}"
         meta = f"   {used_str}"
-        if f.eta_to_cap_secs is not None:
+        if cell and cell.pct is not None:
+            # live number shown in head; also surface the local projection explicitly
+            proj_pct = round(f.projected_pct)
+            meta += f"  proj {proj_pct}% end-of-window"
+        elif f.eta_to_cap_secs is not None:
             meta += f"  ETA {fmt_dh_long(f.eta_to_cap_secs)}"
         lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
 
-        # ONE short provenance line derived only from cell (no direct fetch, no recompute).
-        prov = ""
+        # provenance: exactly the specified forms; "live" wording ONLY when cell.pct is not None
         if cell and cell.pct is not None:
-            age = int(cell.age_secs) if cell.age_secs is not None else 0
-            prov = f"live from {p_canon} ({age}s ago)"
-            if cell.extractor:
-                prov += f" [{cell.extractor}]"
+            age = int(cell.age_secs) if getattr(cell, "age_secs", None) is not None else 0
+            ex = cell.extractor or ""
+            base = f"live {p_canon}.ai"
+            if ex:
+                base += f" · {ex}"
+            prov = f"{base} · {age}s ago" if age else base
         elif cell and cell.state in (
             STATE_AUTH_NO_DATA,
             STATE_RATE_DATA_ONLY,
             STATE_STALE,
             STATE_NEEDS_LOGIN,
+            STATE_UNAVAILABLE,
+            STATE_ERROR,
         ):
-            prov = f"no reliable live data ({cell.state})"
+            prov = f"local projection — no reliable live data ({cell.state})"
         else:
-            # fallback to old-style labels when no cell at all (pure local render)
-            if "grok" in pname.lower() and wname.lower() == "weekly":
-                prov = "Weekly SuperGrok (local ~/.grok logs)"
-            elif pname.lower() in ("claude", "default"):
-                nm = wname.lower()
-                if nm in ("weekly", "week"):
-                    prov = "Weekly cloud (All) — ~/.claude/usage-limits.json anchor"
-                elif nm == "fable":
-                    prov = "Fable (model weekly) — bold = real cap + anchor"
-                elif nm in ("5h", "session", "current"):
-                    prov = "5h current (server rate limits when avail. / local engine; ticks live)"
-            if not prov and top_live_attempted:
-                prov = "live web attempted recently, no reliable data"
-        if prov:
-            lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
+            prov = "local projection — live disabled"
+        lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
 
     lines.append(c.box_bot(width, enabled))
     return lines
 
 
-def render_frame(forecasts, now, color=None, prev_forecasts=None, live_status=None, cells=None):
-    """Beautiful multi-profile dashboard frame.
+def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None):
+    """Fixed-region dashboard frame (plan 034).
 
-    Supports flat list (with .profile tags). Side-by-side for exactly 2 profiles.
-    RESET alarm banner with pulse animation that blinks on refreshes.
+    Layout is always exactly:
+      header (2) + alert (1 blank/reserved) + panels (shape-dependent but fixed)
+      + activity (3) + footer (1)
+
+    The displayed % is live when cell.pct is not None, else local projection.
+    Returns list[str] (use render_frame_str for tests expecting joined str).
+    Drops prev_forecasts/live_status (reset detection stays in run()).
+    snapshot (optional) used for rate_info chips.
     """
     enabled = c.color_enabled() if color is None else color
-    # group by profile (engine tags them)
+
     groups = {}
     for f in forecasts or []:
         p = getattr(f, "profile", "default")
         groups.setdefault(p, []).append(f)
 
-    resets = detect_resets(prev_forecasts, forecasts) if prev_forecasts else []
-
-    lines = []
-    # header — make it obvious whether live web succeeded or not
-    # Use caller-provided live_status if given (to avoid repeated expensive calls
-    # and to allow run() to throttle the live probe rate for smooth updates).
-    st = live_status or {}
-    if not st:
-        # cells=None path for pure tests: do not trigger any fetch here
-        st = {
-            "grok": "unavailable",
-            "claude": "unavailable",
-            "message": "no live_status passed (pure render)",
-        }
-
-    cl = st.get("claude", "unavailable")
-    gr = st.get("grok", "unavailable")
-    last = st.get("last_fetch")
-    last_attempt = st.get("last_attempt") or last
-    delegated = st.get("delegated", False)
-
-    if cl == "ok" and gr == "ok":
-        header = f"{c.M_ORACLE} token-oracle  •  LIVE WEB ACTIVE"
-        ts = last_attempt or last
-        if ts:
-            import time as _t
-
-            age = int(_t.time() - ts)
-            header += f"  •  real data from grok.com + claude.ai (checked {age}s ago)"
-        else:
-            header += "  •  real data from grok.com + claude.ai"
-        if delegated:
-            header += "  [via dedicated venv]"
-    elif cl == "ok" or gr == "ok":
-        header = f"{c.M_ORACLE} token-oracle  •  live web partial"
-        header += f"  •  grok={gr} claude={cl} — run live-setup for the missing one"
+    # width: honor explicit size if passed; default wide enough for boxes
+    if size is not None and hasattr(size, "columns"):
+        w = max(40, int(getattr(size, "columns", 80)))
     else:
-        if delegated:
-            # Outer process using the dedicated venv via delegation
-            header = f"{c.M_ORACLE} token-oracle  •  live web (via dedicated venv)"
-            if (
-                cl == "authenticated_no_data"
-                or gr == "authenticated_no_data"
-                or cl == "rate_data_only"
-                or gr == "rate_data_only"
-            ):
-                detail = (
-                    "authenticated, but no usage numbers parsed yet "
-                    "(use TOKEN_ORACLE_LIVE_DEBUG=1 to inspect)"
-                )
-                if gr == "rate_data_only" or cl == "rate_data_only":
-                    detail = (
-                        "live rate limit data (queries), but no build/weekly "
-                        "usage % (use DEBUG to inspect)"
-                    )
-                header += f"  •  {detail}"
-            else:
-                header += f"  •  configured (grok={gr} claude={cl})"
-        elif lw.PLAYWRIGHT_AVAILABLE:
-            # Native playwright available (best case: we are inside the dedicated venv)
-            header = f"{c.M_ORACLE} token-oracle  •  live web"
-            if (
-                cl == "authenticated_no_data"
-                or gr == "authenticated_no_data"
-                or cl == "rate_data_only"
-                or gr == "rate_data_only"
-            ):
-                detail = (
-                    "authenticated to sites, but no usage numbers parsed yet "
-                    "(TOKEN_ORACLE_LIVE_DEBUG=1 dumps the DOM text)"
-                )
-                if gr == "rate_data_only" or cl == "rate_data_only":
-                    detail = (
-                        "live rate limit data (queries), but no build/weekly "
-                        "usage % (DEBUG for details)"
-                    )
-                header += f"  •  {detail}"
-            else:
-                header += "  •  ready (no data from live web yet)"
-        else:
-            header = f"{c.M_ORACLE} token-oracle  •  logs + limits"
-            header += "  •  run `oracle live-setup` to enable real web numbers"
+        w = 80
 
-    lines.append(c.violet(header, enabled))
-    lines.append(c.dim("═" * 58, enabled))
+    def header_fill() -> list[str]:
+        title = f"{c.M_ORACLE} token-oracle"
+        # compact per-provider chips (inferred from cells; rate via rate_info when snapshot given)
+        prov_map: dict[str, list] = {}
+        for (pc, _wk), cell in (cells or {}).items():
+            prov_map.setdefault(pc, []).append(cell)
+        rinfo = rate_info(snapshot) if snapshot is not None else {}
+        chips: list[str] = []
+        for pc in ("claude", "grok"):
+            cs = prov_map.get(pc, [])
+            live_c = next((cc for cc in cs if getattr(cc, "pct", None) is not None), None)
+            stt = getattr(cs[0], "state", STATE_UNAVAILABLE) if cs else STATE_UNAVAILABLE
+            if live_c is not None:
+                age = int(getattr(live_c, "age_secs", 0) or 0)
+                chips.append(f"{pc} ● live {int(live_c.pct)}% ({age}s)")
+            elif stt == STATE_RATE_DATA_ONLY:
+                ri = rinfo.get(pc, {})
+                used = ri.get("used_pct")
+                if used is not None:
+                    chips.append(f"{pc} ▲ rate {int(used)}%")
+                else:
+                    chips.append(f"{pc} ▲ rate-only")
+            else:
+                chips.append(f"{pc} ◌ no data ({stt})")
+        status = "  •  ".join(chips)
+        return [c.violet(title, enabled), c.dim(status, enabled)]
 
-    # Explicit "did live web work?" line so user always knows "it tried"
-    # This is the main signal for "did the live web path run on this dash?"
-    # Reuse the single st fetched above.
-    try:
-        live_line = "live web: "
-        if cl == "ok" and gr == "ok":
-            live_line += "✓ both grok + claude (real data)"
-        elif cl == "ok":
-            live_line += f"✓ claude  ✗ grok (partial: {gr})"
-        elif gr == "ok":
-            live_line += f"✗ claude ({cl})  ✓ grok"
-        elif (
-            cl == "authenticated_no_data"
-            or gr == "authenticated_no_data"
-            or cl == "rate_data_only"
-            or gr == "rate_data_only"
-        ):
-            detail = (
-                f"authenticated to sites, but no usage numbers extracted yet "
-                f"(grok={gr} claude={cl})"
+    def alert_fill() -> list[str]:
+        # Reserved 1-line slot for reset alarm (populated by run() via its scene fills)
+        return [""]
+
+    def panels_fill() -> list[str]:
+        if not groups:
+            return [c.dim("(no windows / no data — run with active usage)", enabled)]
+        pnames = list(groups.keys())
+        out: list[str] = []
+        if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
+            left = _render_profile_block(
+                pnames[0], groups[pnames[0]], now, enabled, cells, width=60
             )
-            if gr == "rate_data_only" or cl == "rate_data_only":
-                qrem = st.get("grok_query_remaining") or st.get("claude_query_remaining")
-                qtot = st.get("grok_query_total") or st.get("claude_query_total")
-                qw = st.get("grok_query_window_secs") or st.get("claude_query_window_secs")
-                qinfo = (
-                    f"queries {qrem}/{qtot}" + (f" per {qw}s" if qw else "")
-                    if qrem is not None
-                    else ""
-                )
-                detail = (
-                    f"live rate limit data only ({qinfo}), no build/weekly "
-                    f"usage % (grok={gr} claude={cl})"
-                )
-            live_line += f"⚠ {detail}"
-            live_line += " (TOKEN_ORACLE_LIVE_DEBUG=1 + rerun to dump raw page text)"
-        elif cl == "checking" or gr == "checking":
-            live_line += "starting browser + loading live data..."
+            right = _render_profile_block(
+                pnames[1], groups[pnames[1]], now, enabled, cells, width=60
+            )
+            maxl = max(len(left), len(right))
+            left += [" " * 60] * (maxl - len(left))
+            right += [" " * 60] * (maxl - len(right))
+            for lline, rline in zip(left, right, strict=False):
+                out.append(lline + "   " + rline)
         else:
-            live_line += f"✗ no live data (grok={gr} claude={cl})"
-        ts = last_attempt
-        if ts:
-            age = int(time.time() - ts)
-            live_line += f"  (last attempt {age}s ago)"
-        if delegated:
-            live_line += "  [via dedicated venv]"
-        elif not lw.PLAYWRIGHT_AVAILABLE and getattr(lw, "_BLESSED_PYTHON", None):
-            live_line += "  [via dedicated venv]"
-        lines.append(c.dim(live_line, enabled))
-    except Exception:
-        lines.append(c.dim("live web: status check failed", enabled))
-    lines.append("")
+            for pn in sorted(pnames):
+                blk = _render_profile_block(pn, groups[pn], now, enabled, cells, width=66)
+                out.extend(blk)
+                out.append("")
+        return out
 
-    # reset alarm banner (pulses across refreshes) — "Your reset happened"
-    if resets:
-        names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
-        banner = f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
-        lines.append(c.pulse(c.violet(banner, enabled), enabled))
-        lines.append("")
+    def activity_fill() -> list[str]:
+        log = list(probe_log or [])[:3]
+        out: list[str] = []
+        for ln in log:
+            s = ln[:76] if len(ln) > 76 else ln
+            out.append(c.dim("  " + s, enabled))
+        while len(out) < ACTIVITY_H:
+            out.append(c.dim("", enabled))
+        return out
 
-    if not groups:
-        lines.append(c.dim("(no windows / no data — run with active Claude/Grok usage)", enabled))
-        return "\n".join(lines)
+    def footer_fill() -> list[str]:
+        ts = time.strftime("%H:%M:%S")
+        return [c.dim(f"sources: claude_code + grok  •  ctrl-c quit  •  {ts}", enabled)]
 
-    pnames = list(groups.keys())
-    # Side-by-side only when both profiles have matching # of windows (avoids ragged boxes).
-    # Otherwise stack cleanly (reliable, titles never collide).
-    if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
-        left = _render_profile_block(
-            pnames[0], groups[pnames[0]], now, enabled, st, cells, width=60
+    regions = [
+        Region("header", HEADER_H, header_fill),
+        Region("alert", ALERT_H, alert_fill),
+        Region("panels", panel_height(groups), panels_fill),
+        Region("activity", ACTIVITY_H, activity_fill),
+        Region("footer", FOOTER_H, footer_fill),
+    ]
+    sc = Scene(regions)
+    return sc.render(w)
+
+
+def render_frame_str(
+    forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None
+):
+    """Join wrapper for test convenience (old call sites expect str)."""
+    return "\n".join(
+        render_frame(
+            forecasts,
+            now,
+            color=color,
+            cells=cells,
+            probe_log=probe_log,
+            size=size,
+            snapshot=snapshot,
         )
-        right = _render_profile_block(
-            pnames[1], groups[pnames[1]], now, enabled, st, cells, width=60
-        )
-        maxl = max(len(left), len(right))
-        left += [" " * 60] * (maxl - len(left))
-        right += [" " * 60] * (maxl - len(right))
-        for left_line, right_line in zip(left, right, strict=False):
-            lines.append(left_line + "   " + right_line)
-    else:
-        for pn in sorted(pnames):
-            blk = _render_profile_block(pn, groups[pn], now, enabled, st, cells, width=66)
-            lines.extend(blk)
-            lines.append("")
-
-    # footer — make live attempt status obvious
-    # Reuse st from top of function
-    src_note = "claude_code + grok"
-    try:
-        if cl == "ok" or gr == "ok":
-            src_note = "LIVE WEB from websites + local logs"
-        elif delegated:
-            src_note = "live web via dedicated venv (may need re-auth)"
-        elif lw.PLAYWRIGHT_AVAILABLE:
-            src_note = "live web (native)"
-        else:
-            src_note = "local logs + limits (no live web)"
-        if last_attempt:
-            age = int(time.time() - last_attempt)
-            src_note += f" (checked {age}s ago)"
-    except Exception:
-        src_note = "local logs + limits (status error)"
-    extra = c.dim(f"sources: {src_note}  •  bold % = key limits  •  ctrl-c quit", enabled)
-    lines.append(extra)
-    return "\n".join(lines)
+    )
 
 
 def run(cfg):
-    """Live refreshing dashboard. Remembers prev state for reset detection + animation.
+    """Live refreshing dashboard using fixed-height scene + Painter (plan 034).
 
-    Probing happens in a daemon background thread via `oracle live-probe --json`
-    (or the blessed venv oracle). This run() only reads the snapshot file and
-    renders — no browser launch, no stdout pollution from progress.
+    The 033 probe worker runs in daemon thread and populates the live snapshot
+    (via live-probe) + captures its stderr tail for the activity region.
+    Every frame: load snapshot -> overlay_cells -> build/repaint via painter.
+    Resets feed the alert region (pulsed, then blank) without changing height.
+    Full clear ONLY on resize (handled by Painter); in-place \033[K per line.
     """
     last_fs = None
-    last_live_cells = None
-    last_live_st = None
-    LIVE_PROBE_INTERVAL = 60  # seconds; probes are 10-30s, avoid overlap
+    LIVE_PROBE_INTERVAL = 60
 
-    # last_probe_result guarded by simple assignment (daemon worker never prints)
-    last_probe_result = {"st": None, "stderr_tail": []}
+    # Ring buffer for probe stderr (routed to activity region). Worker writes lists
+    # but we normalize to deque for ring semantics.
+    last_probe_result = {"st": None, "stderr_tail": deque(maxlen=3)}
 
     def _probe_worker():
         try:
@@ -427,58 +379,48 @@ def run(cfg):
                         except Exception:
                             snap = None
                     last_probe_result["st"] = snap
-                    last_probe_result["stderr_tail"] = tail
+                    # keep as deque
+                    last_probe_result["stderr_tail"] = deque(tail, maxlen=3)
                 except Exception:
-                    # swallow (timeout, no binary, etc); next cycle will retry
+                    # swallow; next cycle retries
                     pass
                 time.sleep(LIVE_PROBE_INTERVAL)
         except Exception:
-            # daemon, never surface stack on shutdown
             pass
 
-    # start background prober immediately (daemon)
     worker = threading.Thread(target=_probe_worker, daemon=True, name="live-probe-worker")
     worker.start()
 
-    # first frame uses whatever snapshot exists right now (may be stale/unavailable — honest)
-    try:
-        while True:
-            t = time.time()
-            curr = run_forecast(t, cfg)
+    # Wrap entire refresh loop in Painter (alt screen + cursor hidden; restores on any exit)
+    with Painter() as painter:
+        try:
+            while True:
+                t = time.time()
+                curr = run_forecast(t, cfg)
 
-            # cheap read every frame; overlay decides what to show from provenance
-            snap = load_snapshot() or {}
-            last_live_cells = overlay_cells(curr, snap, t)
+                snap = load_snapshot() or {}
+                cells = overlay_cells(curr, snap, t)
+                probe_log = list(last_probe_result.get("stderr_tail") or [])
 
-            # derive minimal st for footer/src_note (render_frame untouched)
-            provs = snap.get("providers") or {}
-            if snap:
-                last_live_st = {
-                    "grok": (provs.get("grok") or {}).get("state", "unavailable"),
-                    "claude": (provs.get("claude") or {}).get("state", "unavailable"),
-                    "last_fetch": snap.get("written_at"),
-                    "last_attempt": snap.get("written_at"),
-                    "delegated": False,
-                    "message": "",
-                }
-            else:
-                last_live_st = None
+                # detect resets here (per plan: stays in run, feeds alert region for N ticks)
+                resets = detect_resets(last_fs, curr) if last_fs is not None else []
 
-            frame = render_frame(
-                curr,
-                t,
-                prev_forecasts=last_fs,
-                live_status=last_live_st,
-                cells=last_live_cells,
-            )
-            footer = c.dim("(ctrl-c to quit)  •  " + time.strftime("%H:%M:%S"), c.color_enabled())
-            # Robust redraw: full clear, then draw line-by-line with explicit clear-to-EOL.
-            print("\033[2J\033[H", end="")
-            for line in (frame + "\n\n" + footer).splitlines():
-                print(line + "\033[K", end="\n")
-            # reset attributes at end of frame
-            print("\033[0m", end="", flush=True)
-            last_fs = curr
-            time.sleep(1.2)  # snappier for live feel + alarm pulse
-    except KeyboardInterrupt:
-        return 0
+                # render base (fixed height, blank alert); override alert line if resets present
+                base = render_frame(
+                    curr, t, color=None, cells=cells, probe_log=probe_log, snapshot=snap
+                )
+                if resets:
+                    names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
+                    banner = f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
+                    # alert line is at index HEADER_H (after 2 header lines); keep length
+                    if len(base) > HEADER_H:
+                        base[HEADER_H] = c.pulse(
+                            c.violet(banner, c.color_enabled()), c.color_enabled()
+                        )
+
+                painter.paint(base)
+                last_fs = curr
+                time.sleep(1.2)
+        except KeyboardInterrupt:
+            # __exit__ of Painter runs on return (restores alt screen + cursor)
+            return 0
