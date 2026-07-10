@@ -132,7 +132,7 @@ def test_doctor_missing_config_is_ok(tmp_path):
 
     missing_path = str(tmp_path / "does-not-exist.json")
     cfg = load_config(missing_path)
-    # avoid the claude_code default source scanning the real ~/.claude/projects
+    # avoid the claude_code default source scanning the real ~/.claude/projects (use generic feed)
     cfg.source = "generic"
     cfg.source_opts = {"events_path": str(tmp_path / "no-events.json")}
     lines, _bad = _doctor_lines(cfg, missing_path, color=False, now=100000.0)

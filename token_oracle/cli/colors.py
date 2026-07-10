@@ -4,7 +4,10 @@ color-off output is identical minus escape codes. Stdlib only. Consumer-ring uti
 oracle.core never imports this."""
 
 import os
+import re
 import sys
+
+_ANSI_RE = re.compile(r'\x1b\[[0-9;]*[mK]')
 
 RESET = "\033[0m"
 
@@ -84,3 +87,46 @@ def ok_badge(good, enabled):
         if good
         else paint(M_BAD, _TIER_CODE["red"], enabled)
     )
+
+
+# Dashboard extras
+M_CLAUDE = "🧠"
+M_GROK = "⚡"
+M_RESET = "🔄"
+M_HEAVY = "💪"
+
+def pulse(text, enabled, period=1.5, now=None):
+    """Simple blink/pulse for alarm: toggles dim/bright based on time."""
+    if not enabled:
+        return text
+    import time
+    t = now if now is not None else time.time()
+    on = int(t / (period / 2)) % 2 == 0
+    if on:
+        return f"\033[1m{text}{RESET}"  # bold flash
+    return dim(text, enabled)
+
+
+def visible_len(s: str) -> int:
+    """Length ignoring ANSI SGR escapes (for box width decisions on colored text)."""
+    return len(_ANSI_RE.sub("", s or ""))
+
+
+def box_top(title, width=40, enabled=True):
+    t = f" {title} " if title else ""
+    bar = "─" * max(0, width - 2 - visible_len(t))
+    return f"┌{t}{bar}┐"
+
+def box_bot(width=40, enabled=True):
+    return f"└{'─' * (width-2)}┘"
+
+def box_line(text, width=40, enabled=True):
+    # pad or truncate using *visible* width so colored %/bars don't get mangled
+    inner_w = width - 2
+    vlen = visible_len(text)
+    if vlen > inner_w:
+        # truncate the logical text; keep leading escapes if any by stripping after cut is risky,
+        # so cut raw then re-trim visible. Simple safe: cut raw conservatively then append …
+        text = text[:inner_w-1] + "…"
+    pad = " " * (inner_w - visible_len(text))
+    return f"│{text}{pad}│"

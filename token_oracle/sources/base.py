@@ -1,6 +1,9 @@
 """Source adapter registry. A source turns provider data into neutral event
 records (see core/events.py); minimally (timestamp, tokens), owning its own
-incremental file/cache state."""
+incremental file/cache state.
+
+Built-ins: claude_code, grok, generic. Register more via @register or
+entry points (future). Use "source" in config.json to select."""
 
 _REGISTRY: dict[str, type] = {}
 

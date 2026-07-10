@@ -35,14 +35,17 @@ Run `token-oracle --help` to list all subcommands.
 
 ## How it works
 
-token-oracle reads your provider's local usage logs, computes an observed token-consumption rate over a configurable sliding window, and estimates how long you have before you exhaust your current allowance or hit your plan cap. No provider API calls — purely offline inference from log files already on your machine. Ships with `pro`/`max5`/`max20` plan presets and an offline USD pricing snapshot for cost estimates, both user-overridable via `plan`, `cost_mode`, and `pricing` config keys.
+token-oracle reads your agent's local usage logs, computes an observed token-consumption rate over a configurable sliding window, and estimates how long you have before you exhaust your current allowance or hit your plan cap. No provider API calls — purely offline inference from log files already on your machine. Ships with `pro`/`max5`/`max20` plan presets and an offline USD pricing snapshot for cost estimates, both user-overridable via `plan`, `cost_mode`, and `pricing` config keys.
 
-Supported sources:
+Supported sources (first-class agent harnesses):
 
-| Source | Log location |
-|--------|-------------|
-| Claude Code | `~/.claude/projects/*/*.jsonl` |
-| Generic (file) | JSON file of `[timestamp, tokens]` pairs via `source_opts.events_path` |
+| Source | `source` value | Log location |
+|--------|----------------|--------------|
+| Claude Code | `claude_code` | `~/.claude/projects/*/*.jsonl` |
+| Grok Build | `grok` | `~/.grok/sessions/*/*/updates.jsonl` + `signals.json` (contextTokensUsed for live) |
+| Generic (file) | `generic` | JSON file of `[timestamp, tokens]` pairs via `source_opts.events_path` |
+
+Multi-subscription: put `"profiles": {"claude": {...}, "grok": {...}}` in config.json to track both Claude Code (Max20 etc) and Grok/SuperGrok Heavy simultaneously. `oracle dash` shows side-by-side with reset alarms.
 
 ## Parts & options
 
@@ -58,6 +61,8 @@ All subcommands accept `--config FILE` (default: `~/.config/token-oracle/config.
 | `doctor` | — | Check configuration and data sources |
 | `dash` | — | Launch full-screen TUI dashboard |
 | `clean` | `--yes` | Remove config, cache, and snapshot files |
+
+Grok Build users: `{"source": "grok"}` (or with `source_opts.sessions_dir`) in config; then `oracle tmux` / `statusline` / `forecast` surface usage. Hooks in `~/.grok/hooks/` can drive `oracle snapshot`.
 
 Full reference: `token-oracle <subcommand> --help`
 
@@ -78,12 +83,12 @@ token-oracle clean      [--config FILE] [--yes]
 
 ## Adapters
 
-Output adapters let token-oracle feed your status bar or terminal multiplexer:
+Output adapters let token-oracle feed your status bar or terminal multiplexer (works for Grok, Claude, etc.):
 
-- **tmux** — writes a tmux-formatted `status-right` fragment
+- **tmux** — writes a tmux-formatted `status-right` fragment (e.g. `set -g status-right '#(oracle tmux)'`)
 - **statusline** — writes a plain-text/ANSI fragment for any status line
 
-See [ADAPTERS.md](ADAPTERS.md) for setup and configuration.
+See [ADAPTERS.md](ADAPTERS.md) for setup and configuration. Grok users in tmux get token status in bottom bar directly.
 
 ## Colors
 
@@ -99,7 +104,7 @@ a % of cap) to signal urgency:
 
 ## Works with agentic-sage
 
-[agentic-sage](https://github.com/muslewski/agentic-sage) is a companion JS tool for managing Claude Code skill definitions. token-oracle is provider-agnostic and complements it by surfacing usage-cap forecasts independently of any AI framework.
+[agentic-sage](https://github.com/muslewski/agentic-sage) is a companion JS tool. token-oracle is provider-agnostic (Claude Code, Grok Build, and generic) and complements agent harnesses by surfacing usage-cap forecasts independently of any AI framework.
 
 ## Contributing
 

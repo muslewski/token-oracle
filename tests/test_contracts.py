@@ -11,3 +11,8 @@ def test_window_modes():
 def test_forecast_confidence_default():
     f = Forecast("5h", 10, 100, 12.0, None, 300.0, False)
     assert f.confidence == 1.0
+    assert f.profile == "default"
+
+def test_forecast_profile_tag():
+    f = Forecast("weekly", 100, 1000, 10.0, None, 100.0, False, profile="grok")
+    assert f.profile == "grok"

@@ -1,7 +1,6 @@
-"""Documented stub source for non-Claude providers. Feed it a JSON file of
-neutral [[timestamp, tokens], ...] pairs (rows may optionally carry more
-fields — see core/events.py). Copy this file to build your own adapter; see
-ADAPTERS.md."""
+"""Neutral generic source (for custom or other agents). Feed a JSON file of
+[[timestamp, tokens], ...] (or full 8-tuples). See grok/claude_code for real
+parsers. Copy/adapt to build your own; see ADAPTERS.md for contract."""
 
 import json
 import os

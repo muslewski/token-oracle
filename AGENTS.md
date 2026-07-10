@@ -49,16 +49,16 @@ usage on disk:
 ```
 🔮 oracle doctor
   ✓ config   — /home/<user>/.config/token-oracle/config.json (missing — using built-in max20 preset)
-  ✓ source   — claude_code (available: claude_code, generic)
+  ✓ source   — claude_code (available: claude_code, generic, grok)
   ✓ data     — 182 files, 32258 events, last 57s ago
   ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json (updated 12m ago)
   ✓ windows  — 2 → ['5h', 'weekly']
   5 ok · 0 need attention
 ```
 
-The `source` row must show `claude_code` as the active source and list at
-least `claude_code, generic` as available. The `data` row must show a
-non-zero event count if Claude Code has been used recently; `no events found`
+The `source` row must show the active source (default `claude_code`) and list
+`claude_code, generic, grok` (or superset) as available. The `data` row must show a
+non-zero event count if the active agent (Claude Code / Grok Build) has been used recently; `no events found`
 with ✗ is expected on a fresh machine with no usage history yet — that is not
 a failure, just an empty history. The `windows` row must show two windows
 named `5h` and `weekly` (the built-in `max20` preset). Each row is badged `✓`
@@ -69,7 +69,7 @@ process exit code is `0` only when every row is `✓`.
 
 ## Step 4 — Configure windows (or accept the default)
 
-The default `max20` preset works for Claude Pro / max20 subscriptions with no
+The default `max20` preset works for Claude Pro / max20 (and similar Grok) subscriptions with no
 config file needed. To customise, run `token-oracle init` to write a starter
 config at `~/.config/token-oracle/config.json` (non-clobbering — pass
 `--force` to overwrite an existing file), then edit it:
@@ -78,8 +78,8 @@ config at `~/.config/token-oracle/config.json` (non-clobbering — pass
 token-oracle init
 ```
 
-This writes the `max20` preset, which looks like this — edit the file to
-adjust windows or source:
+This writes the `max20` preset (source `claude_code`), which looks like this — edit the file to
+adjust windows or source (see Grok example below):
 
 ```json
 {
@@ -96,7 +96,7 @@ Re-run `oracle doctor` to confirm the config file is now loaded:
 ```
 🔮 oracle doctor
   ✓ config   — /home/<user>/.config/token-oracle/config.json
-  ✓ source   — claude_code (available: claude_code, generic)
+  ✓ source   — claude_code (available: claude_code, generic, grok)
   ✓ data     — 182 files, 32263 events, last 6s ago
   ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json (updated 13m ago)
   ✓ windows  — 2 → ['5h', 'weekly']
@@ -111,8 +111,8 @@ Re-run `oracle doctor` to confirm the config file is now loaded:
 oracle forecast
 ```
 
-Expected: a human-readable status line, or `idle` if no Claude Code usage has
-been recorded recently. Example non-idle output:
+Expected: a human-readable status line, or `idle` if no usage has
+been recorded recently for the active source. Example non-idle output:
 
 ```
 🕐 3:42 45k/220k →21%
@@ -187,12 +187,101 @@ forecast file fresh.
 
 ---
 
+## Step 8 — Grok Build first-class support (and multi-agent neutrality)
+
+Grok stores session data (including cumulative `totalTokens` reports) under
+`~/.grok/sessions/<encoded-cwd>/<uuid>/updates.jsonl`. token-oracle now ships a
+first-class `"grok"` source.
+
+To use with Grok:
+
+```bash
+# write starter (or edit manually)
+token-oracle init --force
+# then edit ~/.config/token-oracle/config.json
+```
+
+Example config for Grok (native `.grok/` paths preferred):
+
+```json
+{
+  "source": "grok",
+  "source_opts": {"sessions_dir": "~/.grok/sessions"},
+  "windows": [
+    {"name": "5h",     "cap": 220000,  "period_secs": 18000},
+    {"name": "weekly", "cap": 8000000, "period_secs": 604800}
+  ]
+}
+```
+
+Grok supports hooks (see `~/.grok/docs/user-guide/10-hooks.md` and `17-sessions.md`).
+To keep forecasts fresh during Grok sessions, wire a hook (global `~/.grok/hooks/snapshot.json` or per-project `.grok/hooks/`):
+
+```json
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "oracle snapshot >/dev/null 2>&1", "timeout": 10 } ] }
+    ]
+  }
+}
+```
+
+(Grant project trust with `/hooks-trust` if using project-scoped hooks.)
+
+For tmux bottom bar (works alongside Grok in tmux):
+
+```
+set -g status-right '#(oracle tmux)'
+```
+
+Run `oracle doctor` (with grok source) to verify data row shows Grok events.
+`oracle tmux` / `oracle statusline` / `oracle forecast` now work for Grok users.
+Claude Code remains fully supported (default); adding "cursor"/future harnesses follows the same adapter pattern in `token_oracle/sources/`.
+
+---
+
 ## Verification checklist
 
 - [ ] `pip install -e ".[dev]"` exits 0
 - [ ] `python -m pytest -q` reports all tests passing (count grows over time)
-- [ ] `oracle doctor` shows a `source` row for `claude_code`, a `data` row (non-zero
-      events if Claude Code has been used recently), and a `windows` row for `2`
+- [ ] `oracle doctor` shows a `source` row (default `claude_code`), a `data` row (non-zero
+      events if the configured agent has been used recently), a `source` available list including `grok`, and a `windows` row for `2`
 - [ ] `oracle forecast` returns a line or `idle` (no stack trace)
 - [ ] `oracle forecast --json` returns valid JSON with `"schema": 1`
 - [ ] `oracle snapshot` prints a path and the file exists
+
+## Multi-subscription support (Claude + Grok together)
+
+Config can use "profiles" to track both at once (real-time, combined dash/forecasts).
+Example `~/.config/token-oracle/config.json`:
+
+```json
+{
+  "profiles": {
+    "claude": {
+      "source": "claude_code",
+      "windows": [
+        {"name": "5h", "cap": 220000, "period_secs": 18000},
+        {"name": "weekly", "cap": 8000000, "period_secs": 604800}
+      ]
+    },
+    "grok": {
+      "source": "grok",
+      "source_opts": {"sessions_dir": "~/.grok/sessions"},
+      "windows": [
+        {"name": "weekly", "cap": 10000000, "period_secs": 604800}
+      ]
+    }
+  }
+}
+```
+
+- `oracle doctor` shows multi info.
+- `oracle forecast --json` includes profiles.
+- `oracle dash` : beautiful side-by-side panels, progress, pulsing 🔄 RESET alarm banner when usage drops (new low after reset).
+- Grok improved: uses both updates.jsonl + signals.json (contextTokensUsed + mtime) for freshest.
+- `token-oracle init --preset supergrok` for heavy example.
+- Backward: single "source" configs unchanged. Reset detection in core.engine + dashboard.
+
+Use `oracle dash` to see both subscriptions nicely (Claude plan details + Grok weekly + exact-ish resets + alarm flair).

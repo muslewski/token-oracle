@@ -34,11 +34,13 @@ oracle statusline                # ANSI line (pipe to your shell prompt)
 oracle tmux                      # tmux #(command) substitution
 ```
 
-Example `~/.tmux.conf` entry:
+Example `~/.tmux.conf` entry (works for Grok Build + Claude Code):
 
 ```
 set -g status-right '#(oracle tmux)'
 ```
+
+Grok users: ensure `"source": "grok"` (with sessions_dir if non-default) before relying on the bar.
 
 ### Tier 4 — development install
 
@@ -103,7 +105,7 @@ built-in `max20` preset above is used.
 
 | Field | Type | Default | Description |
 |---|---|---|---|
-| `source` | string | `"claude_code"` | Input adapter name |
+| `source` | string | `"claude_code"` | Input adapter name: `claude_code`, `grok`, or `generic` |
 | `source_opts` | object | `{}` | Options passed to the source adapter |
 | `cache_path` | string | XDG data dir | Path to the rolling event cache |
 | `windows` | array | `max20` preset | List of forecast windows |
@@ -121,8 +123,8 @@ built-in `max20` preset above is used.
 | `anchor` | string or null | no | ISO 8601 timestamp (fixed-grid mode) or omit/null for rolling-from-first-event mode |
 
 **Rolling mode** (omit `anchor` or set to `null`): window starts at its first
-observed event and re-anchors after each expiry. Matches Claude's 5-hour
-rolling block behavior.
+observed event and re-anchors after each expiry. Matches common 5-hour
+rolling block behavior (Claude Code, similar for other harnesses).
 
 **Fixed-grid mode** (`anchor` set to an ISO 8601 string, e.g. `"2026-01-05T00:00:00Z"`):
 window starts at `anchor + n * period_secs`. Useful for weekly/monthly caps that
@@ -139,7 +141,7 @@ from one of the built-in caps instead of writing `windows` by hand:
 | `max5` | 88,000 | 3,200,000 |
 | `max20` | 220,000 | 8,000,000 |
 
-5h caps follow Claude-Code-Usage-Monitor's published approximations; weekly
+5h caps follow published approximations for Claude Pro/Max (and similar for Grok usage); weekly
 caps are proportional estimates — override `windows` for exact values.
 
 ### Example — Claude max20 preset (default)
@@ -147,6 +149,19 @@ caps are proportional estimates — override `windows` for exact values.
 ```json
 {
   "source": "claude_code",
+  "windows": [
+    {"name": "5h",     "cap": 220000,  "period_secs": 18000},
+    {"name": "weekly", "cap": 8000000, "period_secs": 604800}
+  ]
+}
+```
+
+### Example — Grok (default windows + grok source)
+
+```json
+{
+  "source": "grok",
+  "source_opts": {"sessions_dir": "~/.grok/sessions"},
   "windows": [
     {"name": "5h",     "cap": 220000,  "period_secs": 18000},
     {"name": "weekly", "cap": 8000000, "period_secs": 604800}
@@ -173,9 +188,10 @@ caps are proportional estimates — override `windows` for exact values.
 | Source | `source` value | Key `source_opts` |
 |---|---|---|
 | Claude Code transcripts | `"claude_code"` | `"projects_dir"` (default `~/.claude/projects`) |
+| Grok Build sessions | `"grok"` | `"sessions_dir"` (default `~/.grok/sessions`) |
 | Neutral JSON file | `"generic"` | `"events_path"` (required) |
 
-The `generic` source reads a JSON file of `[[timestamp_epoch, tokens], ...]` pairs.
+The `generic` source reads a JSON file of `[[timestamp_epoch, tokens], ...]` pairs (or full event rows). The `grok` source extracts deltas from `totalTokens` reports in `updates.jsonl`.
 
 ---
 

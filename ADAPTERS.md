@@ -88,7 +88,7 @@ time by being imported from `token_oracle.sources`.
 To auto-register a third-party source, import it in your project's entry point
 (or in a `conftest.py` / early startup module) before calling `oracle forecast`.
 
-### Reference implementation — `generic` source
+### Reference implementation — `generic` source (or see `grok.py` / `claude_code.py` for real log parsers)
 
 Copy and adapt `token_oracle/sources/generic.py` as a starting point:
 

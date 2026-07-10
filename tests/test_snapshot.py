@@ -21,6 +21,7 @@ def test_schema_shape_is_stable():
         "reset_in_secs",
         "idle",
         "confidence",
+        "profile",
     }
 
 

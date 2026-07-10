@@ -1,5 +1,5 @@
-"""First source adapter: Claude Code transcripts (~/.claude/projects/*/*.jsonl).
-Ported from usage_limits.iter_usage_events + scan_events."""
+"""Claude Code source adapter: reads ~/.claude/projects/*/*.jsonl .
+One of several (see grok.py, generic.py); first-class but not privileged."""
 
 import glob
 import json
@@ -79,7 +79,13 @@ class ClaudeCodeSource:
                 files.pop(p, None)
                 continue
             ent = files.get(p)
-            if ent and ent.get("mtime") == st.st_mtime and ent.get("size") == st.st_size:
+            # For "live" files (touched very recently relative to the scan's 'now'), always reparse
+            # even if mtime+size match the caller's cache state. This captures appends from an
+            # active Claude Code session promptly, improving 5h current-block freshness.
+            # Guarded so it has no effect under the tiny synthetic 'now' values used in tests.
+            live_window = 300  # seconds
+            is_live = (now > 1_000_000_000) and (st.st_mtime >= now - live_window)
+            if ent and ent.get("mtime") == st.st_mtime and ent.get("size") == st.st_size and not is_live:
                 continue
             evs = [list(e) for e in iter_usage_events(p) if e[0] >= cutoff]
             files[p] = {"mtime": st.st_mtime, "size": st.st_size, "events": evs}

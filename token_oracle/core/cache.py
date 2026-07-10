@@ -1,5 +1,6 @@
 """Persistent aggregation cache: source-owned file state + last-aggregate time
-+ burn profile. Atomic writes. Never raises to the caller."""
++ burn profile. Supports multi-profile via "profiles": {pname: {files, profile, events, ...}}.
+Atomic writes. Never raises to the caller. Old single caches auto-migrated on load."""
 
 import json
 import os
@@ -12,13 +13,30 @@ def load_cache(path):
     try:
         with open(path, encoding="utf-8") as fh:
             c = json.load(fh)
-        if isinstance(c, dict) and "files" in c:
+        if isinstance(c, dict):
             c.setdefault("lastAggregate", 0)
-            c.setdefault("profile", [])
+            # legacy single-profile migration
+            if "files" in c and "profiles" not in c:
+                c.setdefault("profile", [])
+                c.setdefault("events", [])
+            if "profiles" not in c:
+                c["profiles"] = {}
+            # ensure per-profile defaults
+            for p in list(c.get("profiles", {}).keys()):
+                pd = c["profiles"].setdefault(p, {})
+                pd.setdefault("files", {})
+                pd.setdefault("profile", [])
+                pd.setdefault("events", [])
             return c
     except (OSError, ValueError):
         pass
-    return {"files": {}, "lastAggregate": 0, "profile": []}
+    return {
+        "lastAggregate": 0,
+        "files": {},  # legacy
+        "profile": [],
+        "events": [],
+        "profiles": {},
+    }
 
 
 def save_cache(cache, path):

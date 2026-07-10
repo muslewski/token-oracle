@@ -15,11 +15,21 @@ def forecast_to_dict(f):
 
 
 def build_snapshot(forecasts, now):
-    return {
+    # flat list always (with .profile inside each); also grouped when multi
+    windows = [forecast_to_dict(f) for f in forecasts]
+    snap = {
         "schema": SCHEMA_VERSION,
         "generated_at": now,
-        "windows": [forecast_to_dict(f) for f in forecasts],
+        "windows": windows,
     }
+    # convenience grouped view for multi consumers (e.g. sage)
+    groups = {}
+    for w in windows:
+        p = w.get("profile", "default")
+        groups.setdefault(p, []).append(w)
+    if len(groups) > 1:
+        snap["profiles"] = groups
+    return snap
 
 
 def default_snapshot_path():

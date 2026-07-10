@@ -60,3 +60,23 @@ def fmt_dh_long(secs):
     if h or not d:
         parts.append(f"{h} hour{'s' if h != 1 else ''}")
     return " ".join(parts)
+
+
+def fmt_reset(secs):
+    """Human friendly remaining until reset for UI: '26m', '1h 14m', '3d 2h'.
+    Prioritizes minutes when soon; avoids ugly 100+ hour strings."""
+    secs = max(0, int(secs))
+    if secs < 60:
+        return f"{secs}s"
+    if secs < 3600:
+        m = (secs + 59) // 60  # round to nearest minute for UX
+        return f"{m}m"
+    if secs < 86400:
+        h = secs // 3600
+        m = (secs % 3600) // 60
+        return f"{h}h {m:02d}m" if m else f"{h}h"
+    d = secs // 86400
+    h = (secs % 86400) // 3600
+    if h:
+        return f"{d}d {h}h"
+    return f"{d}d"

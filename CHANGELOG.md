@@ -53,6 +53,17 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+### Added
+- First-class `grok` source for Grok Build CLI (`~/.grok/sessions/.../updates.jsonl` totalTokens deltas)
+- Neutrality: generalized docs, examples, AGENTS.md, doctor for Claude Code + Grok Build + generic
+- Grok wiring: config examples, tmux bottom-bar support, hook integration for snapshots
+- `tests/test_sources_grok.py`; adapter pattern remains easy to extend for cursor/windsurf/etc
+
+### Changed
+- Docs/README/SETUP/AGENTS now frame as multi-agent (no Claude lock-in in UX)
+- Source registry, defaults, and examples updated while preserving 100% Claude compat
+- `oracle tmux` / `statusline` now first-class for Grok users in tmux / status areas
+
 ## [0.1.0] — 2026-06-30
 
 ### Added
