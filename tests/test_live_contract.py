@@ -1,19 +1,18 @@
-import json
 import time
 
 from token_oracle.live.contract import (
-    LiveReading,
-    ProviderLive,
     CONF_HIGH,
     CONF_LOW,
-    METRIC_WEEKLY_PCT,
     METRIC_FIVE_HOUR_PCT,
-    provider_live_to_dict,
-    provider_live_from_dict,
-    live_reading_to_dict,
+    METRIC_WEEKLY_PCT,
+    LiveReading,
+    ProviderLive,
     live_reading_from_dict,
+    live_reading_to_dict,
+    provider_live_from_dict,
+    provider_live_to_dict,
 )
-from token_oracle.live.store import save_snapshot, load_snapshot
+from token_oracle.live.store import load_snapshot, save_snapshot
 
 
 def test_live_reading_roundtrip_dict():
@@ -65,6 +64,7 @@ def test_load_snapshot_corrupt_returns_none(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     p = str(tmp_path / "token-oracle" / "live.json")
     import os
+
     os.makedirs(os.path.dirname(p), exist_ok=True)
     with open(p, "w") as fh:
         fh.write("{not valid json[")

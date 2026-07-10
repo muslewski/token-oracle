@@ -6,7 +6,6 @@ Backward compatible: single-source configs behave exactly as before."""
 from . import events as events_mod
 from .cache import AGGREGATE_INTERVAL, load_cache, save_cache
 from .config import load_config, try_get_claude_five_hour_data, try_get_claude_five_hour_remaining
-from .contracts import Forecast
 from .profile import HIST_SECS, build_profile
 from .windows import compute_window
 
@@ -17,7 +16,15 @@ def _get_profile_config(cfg, pname, pdef):
     opts = pdef.get("source_opts", cfg.source_opts or {})
     wins = pdef.get("windows", [])
     if not wins:
-        wins = [{"name": w.name, "cap": w.cap, "period_secs": w.period_secs, "anchor": getattr(w, "anchor", None)} for w in (cfg.windows or [])]
+        wins = [
+            {
+                "name": w.name,
+                "cap": w.cap,
+                "period_secs": w.period_secs,
+                "anchor": getattr(w, "anchor", None),
+            }
+            for w in (cfg.windows or [])
+        ]
     return {"source": src, "source_opts": opts or {}, "windows": wins}
 
 
@@ -34,7 +41,7 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
     events = []
     prof = None
     cslice = cache_slice or {"files": {}, "events": [], "profile": [], "lastAggregate": 0}
-    do_agg = (now - cslice.get("lastAggregate", 0) >= AGGREGATE_INTERVAL)
+    do_agg = now - cslice.get("lastAggregate", 0) >= AGGREGATE_INTERVAL
     if do_agg:
         try:
             files, evs = src.scan(files_state, now, HIST_SECS)
@@ -57,10 +64,11 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
 
     # build Window objs from raw or existing
     wins = []
-    for w in (windows_raw or []):
+    for w in windows_raw or []:
         try:
             if isinstance(w, dict):
                 from .config import _window_from_dict as wfd
+
                 wins.append(wfd(w))
             else:
                 wins.append(w)
@@ -77,7 +85,11 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
         # Claude engine. This makes the "resets in X minutes" relevant and not outdated.
         # Only apply for claude_code source (avoid polluting generic tests or non-claude profiles
         # that happen to name a window "5h").
-        if source_name == "claude_code" and (w.name.lower() in ("5h", "5-hour", "session", "current")) and (not getattr(f, "idle", False)):
+        if (
+            source_name == "claude_code"
+            and (w.name.lower() in ("5h", "5-hour", "session", "current"))
+            and (not getattr(f, "idle", False))
+        ):
             data = try_get_claude_five_hour_data(now)
             if data:
                 if data.get("reset_in_secs") is not None:
@@ -111,7 +123,9 @@ def forecast(now, config=None):
                 pdef = cfg.profiles[pname]
                 pcfg = _get_profile_config(cfg, pname, pdef)
                 wraw = pcfg.get("windows") or cfg.windows
-                cslice = prof_cache.setdefault(pname, {"files": {}, "events": [], "profile": [], "lastAggregate": 0})
+                cslice = prof_cache.setdefault(
+                    pname, {"files": {}, "events": [], "profile": [], "lastAggregate": 0}
+                )
                 cslice, fs = _forecast_one(now, pcfg["source"], pcfg["source_opts"], wraw, cslice)
                 prof_cache[pname] = cslice
                 for f in fs:
@@ -126,6 +140,7 @@ def forecast(now, config=None):
         else:
             # legacy single path (exact previous behavior)
             from ..sources.base import get_source
+
             source = get_source(cfg.source, cfg.source_opts)
             if now - cache.get("lastAggregate", 0) >= AGGREGATE_INTERVAL:
                 files, events = source.scan(cache.get("files", {}), now, HIST_SECS)
@@ -143,7 +158,11 @@ def forecast(now, config=None):
             fs = []
             for w in cfg.windows:
                 f = compute_window(events, now, w, profile)
-                if cfg.source == "claude_code" and (w.name.lower() in ("5h", "5-hour", "session", "current")) and (not getattr(f, "idle", False)):
+                if (
+                    cfg.source == "claude_code"
+                    and (w.name.lower() in ("5h", "5-hour", "session", "current"))
+                    and (not getattr(f, "idle", False))
+                ):
                     data = try_get_claude_five_hour_data(now)
                     if data:
                         if data.get("reset_in_secs") is not None:
@@ -151,7 +170,9 @@ def forecast(now, config=None):
                         if data.get("projected_pct") is not None:
                             object.__setattr__(f, "projected_pct", data["projected_pct"])
                         if data.get("projected_pct") is not None and data.get("source") == "server":
-                            object.__setattr__(f, "used", int(round(data["projected_pct"] / 100.0 * w.cap)))
+                            object.__setattr__(
+                                f, "used", int(round(data["projected_pct"] / 100.0 * w.cap))
+                            )
                     else:
                         claude_rem = try_get_claude_five_hour_remaining(now)
                         if claude_rem is not None and claude_rem > 0:
@@ -192,10 +213,10 @@ def detect_resets(prev_fs, curr_fs, threshold_drop=0.3, low_abs=10000, high_prev
     """
     resets = []
     prev_map = {}
-    for f in (prev_fs or []):
+    for f in prev_fs or []:
         key = (getattr(f, "profile", "default"), f.window)
         prev_map[key] = f
-    for f in (curr_fs or []):
+    for f in curr_fs or []:
         if f.idle:
             continue
         key = (getattr(f, "profile", "default"), f.window)
@@ -203,20 +224,26 @@ def detect_resets(prev_fs, curr_fs, threshold_drop=0.3, low_abs=10000, high_prev
         if not p or p.idle:
             # new low usage after presumed reset
             if f.used < low_abs:
-                resets.append({
+                resets.append(
+                    {
+                        "profile": key[0],
+                        "window": f.window,
+                        "prev_used": getattr(p, "used", 0) if p else 0,
+                        "curr_used": f.used,
+                        "reset_in_secs": f.reset_in_secs,
+                    }
+                )
+            continue
+        if p.used > 0 and (
+            f.used < p.used * threshold_drop or (f.used < low_abs and p.used > high_prev)
+        ):
+            resets.append(
+                {
                     "profile": key[0],
                     "window": f.window,
-                    "prev_used": getattr(p, "used", 0) if p else 0,
+                    "prev_used": p.used,
                     "curr_used": f.used,
                     "reset_in_secs": f.reset_in_secs,
-                })
-            continue
-        if p.used > 0 and (f.used < p.used * threshold_drop or (f.used < low_abs and p.used > high_prev)):
-            resets.append({
-                "profile": key[0],
-                "window": f.window,
-                "prev_used": p.used,
-                "curr_used": f.used,
-                "reset_in_secs": f.reset_in_secs,
-            })
+                }
+            )
     return resets

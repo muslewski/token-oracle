@@ -5,21 +5,21 @@ facts get medium/high. Plans 031/032 replace the fetchers with extractors
 that emit high-confidence readings natively."""
 
 from .contract import (
-    ProviderLive,
-    LiveReading,
-    STATE_OK,
-    STATE_RATE_DATA_ONLY,
-    STATE_AUTH_NO_DATA,
-    STATE_NEEDS_LOGIN,
     CONF_HIGH,
-    CONF_MEDIUM,
     CONF_LOW,
-    METRIC_WEEKLY_PCT,
-    METRIC_MODEL_WEEKLY_PCT,
+    CONF_MEDIUM,
     METRIC_FIVE_HOUR_PCT,
     METRIC_FIVE_HOUR_STATE,
-    METRIC_RESET_AT,
+    METRIC_MODEL_WEEKLY_PCT,
     METRIC_RATE_WINDOW,
+    METRIC_RESET_AT,
+    METRIC_WEEKLY_PCT,
+    STATE_AUTH_NO_DATA,
+    STATE_NEEDS_LOGIN,
+    STATE_OK,
+    STATE_RATE_DATA_ONLY,
+    LiveReading,
+    ProviderLive,
 )
 
 
@@ -32,7 +32,16 @@ def _evidence(raw: dict | None, key_fallback: str) -> str:
     return str(ev)[:160]
 
 
-def _make_reading(provider: str, metric: str, value, confidence: str, extractor: str, evidence: str, fetched_at: float, model: str | None = None) -> LiveReading:
+def _make_reading(
+    provider: str,
+    metric: str,
+    value,
+    confidence: str,
+    extractor: str,
+    evidence: str,
+    fetched_at: float,
+    model: str | None = None,
+) -> LiveReading:
     return LiveReading(
         provider=provider,
         metric=metric,
@@ -62,7 +71,14 @@ def provider_live_from_legacy(provider: str, raw: dict | None, now: float) -> Pr
 
     if raw is None:
         # no data at all
-        return ProviderLive(provider=prov, state=STATE_NEEDS_LOGIN, readings=[], fetched_at=now, error=None, note=note)
+        return ProviderLive(
+            provider=prov,
+            state=STATE_NEEDS_LOGIN,
+            readings=[],
+            fetched_at=now,
+            error=None,
+            note=note,
+        )
 
     auth = bool(raw.get("authenticated"))
     has_usage = False
@@ -77,55 +93,93 @@ def provider_live_from_legacy(provider: str, raw: dict | None, now: float) -> Pr
             pct = float(raw["overall_pct"])
             key = "overall_pct"
         if pct is not None:
-            readings.append(_make_reading(
-                prov, METRIC_WEEKLY_PCT, pct, CONF_LOW,
-                "grok.legacy", _evidence(raw, key), now
-            ))
+            readings.append(
+                _make_reading(
+                    prov, METRIC_WEEKLY_PCT, pct, CONF_LOW, "grok.legacy", _evidence(raw, key), now
+                )
+            )
             has_usage = True
 
     # Claude weekly all + fable
     if prov == "claude":
         if raw.get("all_pct") is not None:
             pct = float(raw["all_pct"])
-            readings.append(_make_reading(
-                prov, METRIC_WEEKLY_PCT, pct, CONF_LOW,
-                "claude.legacy", _evidence(raw, "all_pct"), now
-            ))
+            readings.append(
+                _make_reading(
+                    prov,
+                    METRIC_WEEKLY_PCT,
+                    pct,
+                    CONF_LOW,
+                    "claude.legacy",
+                    _evidence(raw, "all_pct"),
+                    now,
+                )
+            )
             has_usage = True
         if raw.get("fable_pct") is not None:
             pct = float(raw["fable_pct"])
-            readings.append(_make_reading(
-                prov, METRIC_MODEL_WEEKLY_PCT, pct, CONF_LOW,
-                "claude.legacy", _evidence(raw, "fable_pct"), now, model="fable"
-            ))
+            readings.append(
+                _make_reading(
+                    prov,
+                    METRIC_MODEL_WEEKLY_PCT,
+                    pct,
+                    CONF_LOW,
+                    "claude.legacy",
+                    _evidence(raw, "fable_pct"),
+                    now,
+                    model="fable",
+                )
+            )
             has_usage = True
         if raw.get("five_hour_pct") is not None:
             pct = float(raw["five_hour_pct"])
-            readings.append(_make_reading(
-                prov, METRIC_FIVE_HOUR_PCT, pct, CONF_LOW,
-                "claude.legacy", _evidence(raw, "five_hour_pct"), now
-            ))
+            readings.append(
+                _make_reading(
+                    prov,
+                    METRIC_FIVE_HOUR_PCT,
+                    pct,
+                    CONF_LOW,
+                    "claude.legacy",
+                    _evidence(raw, "five_hour_pct"),
+                    now,
+                )
+            )
             has_usage = True
 
     # five_hour_state (medium even from legacy, as it's structural)
     if raw.get("five_hour_state") == "starts_on_first_message":
-        readings.append(_make_reading(
-            prov, METRIC_FIVE_HOUR_STATE, "starts_on_first_message", CONF_MEDIUM,
-            "claude.legacy", _evidence(raw, "five_hour_state"), now
-        ))
+        readings.append(
+            _make_reading(
+                prov,
+                METRIC_FIVE_HOUR_STATE,
+                "starts_on_first_message",
+                CONF_MEDIUM,
+                "claude.legacy",
+                _evidence(raw, "five_hour_state"),
+                now,
+            )
+        )
 
     # Grok rate window (high, but info-only metric)
     if raw.get("query_remaining") is not None and raw.get("query_total") is not None:
         qrem = raw.get("query_remaining")
         qtot = raw.get("query_total")
         try:
-            qrem = float(qrem); qtot = float(qtot)
+            qrem = float(qrem)
+            qtot = float(qtot)
             if qtot > 0:
                 used_pct = (qtot - qrem) / qtot * 100.0
-                readings.append(_make_reading(
-                    prov, METRIC_RATE_WINDOW, used_pct, CONF_HIGH,
-                    "grok.legacy", _evidence(raw, "query_remaining+query_total"), now
-                ))
+                readings.append(
+                    _make_reading(
+                        prov,
+                        METRIC_RATE_WINDOW,
+                        used_pct,
+                        CONF_HIGH,
+                        "grok.legacy",
+                        _evidence(raw, "query_remaining+query_total"),
+                        now,
+                    )
+                )
         except Exception:
             pass
 
@@ -134,17 +188,25 @@ def provider_live_from_legacy(provider: str, raw: dict | None, now: float) -> Pr
     if secs is not None:
         try:
             reset_val = now + float(secs)
-            readings.append(_make_reading(
-                prov, METRIC_RESET_AT, reset_val, CONF_LOW,
-                "legacy", _evidence(raw, "reset_in_secs"), now
-            ))
+            readings.append(
+                _make_reading(
+                    prov,
+                    METRIC_RESET_AT,
+                    reset_val,
+                    CONF_LOW,
+                    "legacy",
+                    _evidence(raw, "reset_in_secs"),
+                    now,
+                )
+            )
         except Exception:
             pass
 
     # State selection per plan: ok ONLY on high usage reading; else rate if present;
     # else authenticated_no_data / needs_login.
     high_usage = any(
-        r.confidence == CONF_HIGH and r.metric in (METRIC_WEEKLY_PCT, METRIC_MODEL_WEEKLY_PCT, METRIC_FIVE_HOUR_PCT)
+        r.confidence == CONF_HIGH
+        and r.metric in (METRIC_WEEKLY_PCT, METRIC_MODEL_WEEKLY_PCT, METRIC_FIVE_HOUR_PCT)
         for r in readings
     )
     has_rate = any(r.metric == METRIC_RATE_WINDOW for r in readings)
