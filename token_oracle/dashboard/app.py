@@ -15,9 +15,9 @@ from ..live.contract import (
     STATE_NEEDS_LOGIN,
     STATE_RATE_DATA_ONLY,
     STATE_STALE,
+    ProviderLive,
     provider_live_to_dict,
 )
-from ..live.legacy import provider_live_from_legacy
 from ..live.overlay import overlay_cells
 from ..live.store import save_snapshot
 
@@ -442,15 +442,28 @@ def run(cfg):
             # Throttle expensive live probes after the first frame.
             do_probe = first_frame or last_live_st is None or t - last_live_t > LIVE_STATUS_INTERVAL
             if do_probe:
-                # Silence during the actual legacy fetches (they may still log inside web).
+                # Silence during the actual fetches (they may still log inside web).
                 prev_silent2 = os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE")
                 os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = "1"
                 try:
                     g_raw = lw.fetch_grok_live_usage(headless=True)
                     c_raw = lw.fetch_claude_live_usage(headless=True)
                     nowt = time.time()
-                    g_pl = provider_live_from_legacy("grok", g_raw, nowt)
-                    c_pl = provider_live_from_legacy("claude", c_raw, nowt)
+                    # Both now return ProviderLive natively (plans 031/032); legacy adapter deleted.
+                    g_pl = (
+                        g_raw
+                        if isinstance(g_raw, ProviderLive)
+                        else ProviderLive(
+                            provider="grok", state="needs_login", readings=[], fetched_at=nowt
+                        )
+                    )
+                    c_pl = (
+                        c_raw
+                        if isinstance(c_raw, ProviderLive)
+                        else ProviderLive(
+                            provider="claude", state="needs_login", readings=[], fetched_at=nowt
+                        )
+                    )
                     providers = {"grok": g_pl, "claude": c_pl}
                     save_snapshot(providers)
                     last_live_st = {

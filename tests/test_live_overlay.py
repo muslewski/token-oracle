@@ -9,8 +9,9 @@ from token_oracle.live.contract import (
     METRIC_WEEKLY_PCT,
     STATE_AUTH_NO_DATA,
     STATE_STALE,
+    LiveReading,
+    ProviderLive,
 )
-from token_oracle.live.legacy import provider_live_from_legacy
 from token_oracle.live.overlay import FRESH_TTL_SECS, overlay_cells
 
 
@@ -170,13 +171,22 @@ def test_fable_maps_to_fable_not_weekly():
     assert cells.get(("claude", "weekly")) is None  # not leaked to weekly
 
 
-def test_provider_live_from_legacy_grok_overall_low_and_auth_state():
+def test_provider_live_low_conf_gives_auth_no_data():
+    """Equivalent to old legacy low-conf test (legacy adapter deleted in 032).
+    Low confidence usage reading → not 'ok' state; reading is preserved.
+    """
     now = time.time()
-    pl = provider_live_from_legacy("grok", {"authenticated": True, "overall_pct": 13.0}, now)
-    assert (
-        pl.state in (STATE_AUTH_NO_DATA, "authenticated_no_data") or pl.state == "ok"
-    )  # ok only if high
-    # the reading must exist and be low
+    low = LiveReading(
+        provider="grok",
+        metric=METRIC_WEEKLY_PCT,
+        value=13.0,
+        confidence=CONF_LOW,
+        extractor="grok.legacy",
+        evidence="overall_pct",
+        fetched_at=now,
+    )
+    pl = ProviderLive(provider="grok", state=STATE_AUTH_NO_DATA, readings=[low], fetched_at=now)
+    assert pl.state in (STATE_AUTH_NO_DATA, "authenticated_no_data")
     weekly = [r for r in pl.readings if r.metric == METRIC_WEEKLY_PCT]
     assert len(weekly) == 1
     assert weekly[0].confidence == CONF_LOW
