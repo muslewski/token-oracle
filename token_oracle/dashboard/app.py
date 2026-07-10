@@ -8,7 +8,7 @@ import time
 from ..cli import colors as c
 from ..core.engine import detect_resets, forecast as run_forecast
 from ..core.timeutil import fmt_dh_long, fmt_hms, fmt_reset, fmt_tokens
-from ..sources import live_web as lw
+from ..live import web as lw
 
 BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
 

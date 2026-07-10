@@ -134,7 +134,7 @@ def _doctor_lines(cfg, config_path, color, now):
 
     # Live web status (very visible so you know if it worked / if it tried)
     try:
-        from token_oracle.sources import live_web as lw
+        from token_oracle.live import web as lw
         print("   → starting browser + loading live pages (step-by-step progress will appear below)...")
         st = lw.get_live_status()
         extra = ""
@@ -160,7 +160,7 @@ def _doctor_lines(cfg, config_path, color, now):
                 out.append(colors.dim("            → tip: TOKEN_ORACLE_LIVE_DEBUG=1 oracle doctor ; cat /tmp/token-oracle-*-usage.txt", color))
                 # Try one raw fetch to surface scrape diagnostics (len, pcts_found, note) for immediate grasp
                 try:
-                    from token_oracle.sources import live_web as lw
+                    from token_oracle.live import web as lw
                     raw = None
                     if gr in ("authenticated_no_data", "rate_data_only"):
                         raw = lw.fetch_grok_live_usage(headless=True)
@@ -298,7 +298,7 @@ def _bootstrap_playwright_if_needed():
     """
     import subprocess
 
-    from ..sources import live_web
+    from ..live import web as live_web
 
     # Never bootstrap (or execve) when running under pytest — it would
     # either hang creating venvs or exec-replace the test runner process.
@@ -361,7 +361,7 @@ def _live_setup(cfg, args):
     4. After that `oracle dash` shows the real numbers from the websites.
     """
     import subprocess
-    from ..sources import live_web
+    from ..live import web as live_web
     from ..cli import colors as c
 
     # This makes it "just work" for community users on all kinds of systems

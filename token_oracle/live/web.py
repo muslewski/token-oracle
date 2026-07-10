@@ -36,34 +36,49 @@ except ImportError:
     pass
 
 # Blessed venv for live features (created by live-setup bootstrap)
+# Detection is now lazy: importing this module must not spawn any subprocess.
 _BLESSED_VENV_PY = os.path.expanduser("~/.local/share/token-oracle/venv/bin/python")
 _BLESSED_PYTHON = None
-if not PLAYWRIGHT_AVAILABLE and os.path.isfile(_BLESSED_VENV_PY):
-    try:
-        out = subprocess.check_output(
-            [_BLESSED_VENV_PY, "-c", "import playwright; print('ok')"],
-            text=True, stderr=subprocess.DEVNULL, timeout=5
-        )
-        if "ok" in out:
-            _BLESSED_PYTHON = _BLESSED_VENV_PY
-    except Exception:
-        pass
+_BLESSED_CHECKED = False
+
+
+def _blessed_python():
+    """Return path to blessed python (if usable) or None. Performs the
+    one-time subprocess check only on first call; result cached in module
+    globals. This eliminates the import-time side effect.
+    """
+    global _BLESSED_PYTHON, _BLESSED_CHECKED
+    if _BLESSED_CHECKED:
+        return _BLESSED_PYTHON
+    _BLESSED_CHECKED = True
+    if not PLAYWRIGHT_AVAILABLE and os.path.isfile(_BLESSED_VENV_PY):
+        try:
+            out = subprocess.check_output(
+                [_BLESSED_VENV_PY, "-c", "import playwright; print('ok')"],
+                text=True, stderr=subprocess.DEVNULL, timeout=5
+            )
+            if "ok" in out:
+                _BLESSED_PYTHON = _BLESSED_VENV_PY
+        except Exception:
+            pass
+    return _BLESSED_PYTHON
 
 
 def _delegate_to_blessed(func_name: str, **kwargs):
     """Run a fetch/lookup function in the blessed venv python and return the result."""
-    if not _BLESSED_PYTHON:
+    bp = _blessed_python()
+    if not bp:
         return None
     try:
         arg_json = json.dumps(kwargs)
         code = f"""
 import json
-from token_oracle.sources.live_web import {func_name}
+from token_oracle.live.web import {func_name}
 kwargs = json.loads({arg_json!r})
 data = {func_name}(**kwargs)
 print(json.dumps(data, default=str))
 """
-        out = subprocess.check_output([_BLESSED_PYTHON, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60)
+        out = subprocess.check_output([bp, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60)
         return json.loads(out)
     except Exception:
         return None
@@ -871,15 +886,16 @@ def get_live_status() -> dict:
     attempt_at = time.time()
     result = {"grok": "unavailable", "claude": "unavailable", "last_fetch": None, "last_attempt": attempt_at, "delegated": False, "message": ""}
     if not PLAYWRIGHT_AVAILABLE:
-        if _BLESSED_PYTHON:
+        bp = _blessed_python()
+        if bp:
             # Delegate the whole status call
             try:
                 code = """
 import json
-from token_oracle.sources.live_web import get_live_status
+from token_oracle.live.web import get_live_status
 print(json.dumps(get_live_status()))
 """
-                out = subprocess.check_output([_BLESSED_PYTHON, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60)
+                out = subprocess.check_output([bp, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60)
                 delegated = json.loads(out)
                 delegated["delegated"] = True
                 delegated["message"] = "using dedicated venv"
