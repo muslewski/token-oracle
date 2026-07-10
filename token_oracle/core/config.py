@@ -485,6 +485,7 @@ def update_config_file(path: str | None, updates: dict) -> str:
     """Deep-ish merge `updates` into the JSON config at `path` (or the default
     path), preserving all other keys, and write atomically. Returns the path."""
     import tempfile
+
     path = os.path.expanduser(path or default_config_path())
     data = {}
     if os.path.exists(path):
@@ -497,7 +498,9 @@ def update_config_file(path: str | None, updates: dict) -> str:
             data = {}
     for k, v in updates.items():
         if isinstance(v, dict) and isinstance(data.get(k), dict):
-            merged = dict(data[k]); merged.update(v); data[k] = merged
+            merged = dict(data[k])
+            merged.update(v)
+            data[k] = merged
         else:
             data[k] = v
     d = os.path.dirname(path)

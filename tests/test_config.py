@@ -256,7 +256,8 @@ def test_live_headed_parsed_true(tmp_path):
 def test_live_headed_default_false(tmp_path):
     c = CFG.load_config(str(tmp_path / "none.json"))
     assert c.headed_enabled() is False
-    assert c.live == {}
+    # internal: absent "live" in source normalizes to explicit false (defensive)
+    assert c.live.get("headed") is False
 
 
 def test_live_headed_invalid_ignored(tmp_path):

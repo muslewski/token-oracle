@@ -333,11 +333,13 @@ def test_live_on_persists(tmp_path):
     cfg_path = str(tmp_path / "c.json")
     # write minimal to avoid side effects
     import json as _json
+
     (tmp_path / "c.json").write_text(_json.dumps({"plan": "max20"}))
 
     rc = main(["live", "on", "--config", cfg_path])
     assert rc == 0
     from token_oracle.core.config import load_config as _load
+
     assert _load(cfg_path).headed_enabled() is True
 
     rc = main(["live", "off", "--config", cfg_path])
@@ -351,15 +353,18 @@ def test_live_probe_honors_config_headed(tmp_path, monkeypatch):
 
     cfg_path = str(tmp_path / "c.json")
     import json as _json
+
     # headed true
     (tmp_path / "c.json").write_text(_json.dumps({"live": {"headed": True}}))
 
     calls = []
+
     def fake_run_probe(**kwargs):
         calls.append(kwargs)
         return {"version": 1, "providers": {}}
 
     import token_oracle.live.probe as pr
+
     monkeypatch.setattr(pr, "run_probe", fake_run_probe)
 
     rc = main(["live-probe", "--json", "--config", cfg_path])
