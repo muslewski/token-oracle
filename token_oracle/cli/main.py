@@ -200,7 +200,22 @@ def _doctor_lines(cfg, config_path, color, now):
             )
         else:
             parts = [_fmt_one("grok", gr), _fmt_one("claude", cl)]
-            out.append(colors.dim("  live     — " + " ".join(parts), color))
+            live_msg = "  live     — " + " ".join(parts)
+            # When a provider note mentions bot challenge, include the actionable hint in live row.
+            try:
+                snap = load_snapshot() or {}
+                for pn in ("grok", "claude"):
+                    pdat = (snap.get("providers") or {}).get(pn, {})
+                    note = str(pdat.get("note", "")) if isinstance(pdat, dict) else ""
+                    if "bot challenge" in note.lower():
+                        live_msg = (
+                            "  live     — bot challenge — try "
+                            "TOKEN_ORACLE_LIVE_HEADED=1 oracle live-probe"
+                        )
+                        break
+            except Exception:
+                pass
+            out.append(colors.dim(live_msg, color))
     except Exception:
         out.append(colors.dim("  live     — status check failed", color))
     return out, bad
@@ -307,9 +322,10 @@ def main(argv=None):
         from ..live.probe import run_probe
 
         prov = args.provider
+        headless = os.environ.get("TOKEN_ORACLE_LIVE_HEADED") != "1"
         snap = run_probe(
             providers=prov,
-            headless=True,
+            headless=headless,
             progress=lambda m: print(m, file=sys.stderr),
         )
         if args.json:

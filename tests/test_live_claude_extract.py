@@ -197,3 +197,20 @@ def test_network_json_is_conservative_noop():
     assert rs == []
     rs2 = readings_from_network_json("u", {"weekly": {"percent": 22}}, now)
     assert rs2 == []
+
+
+def test_is_bot_challenge_detects_cf_interstitial_and_ignores_normal_pages():
+    from token_oracle.live.extract_common import is_bot_challenge
+
+    # challenge cases (title or body)
+    assert is_bot_challenge("Just a moment...", "foo") is True
+    assert is_bot_challenge("JUST A MOMENT", "bar") is True
+    assert is_bot_challenge("title", "Performing security verification please wait") is True
+    assert is_bot_challenge("", "This security service to protect against... Cloudflare") is True
+    assert is_bot_challenge("Just a moment... | Cloudflare", "Performance and Security by Cloudflare") is True
+
+    # normal pages
+    assert is_bot_challenge("Claude | Settings", "Usage 38% weekly") is False
+    assert is_bot_challenge("Grok - Usage", "limits and bars here") is False
+    assert is_bot_challenge("", "normal body text without cf phrases") is False
+    assert is_bot_challenge("Login", "sign in to continue") is False

@@ -3,6 +3,7 @@ live.json. Progress goes to the callback (stderr by default) so no consumer
 surface can be polluted by browser chatter.
 """
 
+import os
 import time
 
 from .contract import STATE_ERROR, ProviderLive, provider_live_to_dict
@@ -18,6 +19,8 @@ def run_probe(
     ProviderLive(state=STATE_ERROR, error=str(e)[:200]) — one provider
     failing must not lose the other's data.
     """
+    if os.environ.get("TOKEN_ORACLE_LIVE_HEADED") == "1":
+        headless = False
     if isinstance(providers, str):
         if providers.lower() == "all":
             prov_list = ["grok", "claude"]
