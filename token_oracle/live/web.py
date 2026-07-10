@@ -18,22 +18,30 @@ For first-time login, you can temporarily run with headless=False.
 
 import json
 import os
-import re
 import shutil
 import subprocess
 import sys
 import time
 from typing import Any
 
+from .claude_extract import (
+    five_hour_state_from_rows,
+    readings_from_rows,
+)
+from .claude_extract import (
+    readings_from_network_json as claude_readings_from_network_json,
+)
 from .contract import (
     STATE_NEEDS_LOGIN,
     ProviderLive,
     provider_live_from_dict,
 )
-from .grok_extract import (
+from .extract_common import (
     build_provider_live,
     merge_readings,
     monotonic_guard,
+)
+from .grok_extract import (
     readings_from_labeled_text,
     readings_from_network_json,
     readings_from_progressbars,
@@ -45,7 +53,6 @@ sync_playwright = None  # type: ignore
 PlaywrightTimeout = Exception  # type: ignore
 
 try:
-    from playwright.sync_api import TimeoutError as PlaywrightTimeout
     from playwright.sync_api import sync_playwright  # type: ignore
 
     PLAYWRIGHT_AVAILABLE = True
@@ -143,7 +150,10 @@ def _cached_fetch(key: str, fetcher, *a, **k):
 
 
 def get_browser_profile_dir(provider: str) -> str:
-    """Public helper: returns the persistent browser profile directory for a provider ('grok' or 'claude')."""
+    (
+        """Public helper: returns the persistent browser profile directory for a provider"""
+        " ('grok' or 'claude')."
+    )
     name = "grok" if provider.lower().startswith("grok") else "claude"
     base = os.path.expanduser("~/.config/token-oracle/browser-profiles")
     d = os.path.join(base, name)
@@ -345,8 +355,9 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
     let lb = '';
     const csel = 'section, li, [class*="card" i], [class*="usage" i], [class*="quota" i]';
     const anc = el.closest(csel) || el.parentElement || el;
-    if (anc) { lb = (anc.innerText || anc.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 120); }
-    bars.push({valuenow: vn, valuemax: vm, label: lb});
+    if (anc) { lb = (anc.innerText || anc.textContent || '').trim()."""
+                    "replace(/\\s+/g, ' ').slice(0, 120); }\n"
+                    """    bars.push({valuenow: vn, valuemax: vm, label: lb});
   });
   const labelAnc = new Set();
   document.querySelectorAll(barSel).forEach(el => {
@@ -449,29 +460,45 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
         return None
 
 
-def fetch_claude_live_usage(
-    headless: bool = True, timeout_ms: int = 15000
-) -> dict[str, Any] | None:
-    """Fetch current Claude usage from claude.ai/settings/usage .
+def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> ProviderLive | None:
+    """Fetch current Claude usage from claude.ai/settings/usage.
 
-    Returns similar dict with 5h and weekly info.
-    Uses TTL cache.
+    Returns ProviderLive (state + evidence-bound LiveReadings) or None only
+    when playwright unavailable and delegation failed.
+    Uses short TTL cache keyed claude:{headless}.
     """
     if not PLAYWRIGHT_AVAILABLE:
-        return _delegate_to_blessed(
+        delegated = _delegate_to_blessed(
             "fetch_claude_live_usage", headless=headless, timeout_ms=timeout_ms
         )
+        if isinstance(delegated, ProviderLive):
+            return delegated
+        if delegated is None:
+            return None
+        if isinstance(delegated, dict):
+            try:
+                return provider_live_from_dict(delegated)
+            except Exception:
+                return None
+        return None
 
     ck = f"claude:{headless}"
-    nowt = time.time()
+    now = time.time()
     ent = _LIVE_CACHE.get(ck)
-    if ent and nowt - ent["ts"] < _LIVE_TTL:
-        return ent["val"]
+    if ent and now - ent["ts"] < _LIVE_TTL:
+        cached = ent["val"]
+        if isinstance(cached, ProviderLive):
+            return cached
+        if isinstance(cached, dict):
+            try:
+                return provider_live_from_dict(cached)
+            except Exception:
+                pass
+        return None
 
     url = "https://claude.ai/settings/usage"
     profile_dir = _get_profile_dir("claude")
 
-    val = None
     try:
         if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
             print("   • launching browser (Chromium) for claude.ai ...")
@@ -483,160 +510,211 @@ def fetch_claude_live_usage(
                 viewport={"width": 1100, "height": 800},
             )
             page = context.new_page()
+
+            # Capture raw JSON payloads BEFORE navigation (claude loads usage data via API).
+            captured: list[tuple[str, dict]] = []
+
+            def _on_response(resp):
+                try:
+                    ct = resp.headers.get("content-type", "") or ""
+                    if "json" in ct.lower():
+                        j = resp.json()
+                        if isinstance(j, dict):
+                            captured.append((resp.url or "", j))
+                except Exception:
+                    pass
+
+            try:
+                page.on("response", _on_response)
+            except Exception:
+                pass
+
             if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
                 print("   • loading claude.ai/settings/usage ...")
-            page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
+            except Exception:
+                pass
 
-            # Aggressive SPA handling for claude.ai too
             try:
                 page.wait_for_load_state("networkidle", timeout=7000)
             except Exception:
                 pass
-            for _ in range(2):
-                try:
-                    for label in ("Usage", "usage", "Limits"):
-                        loc = page.get_by_text(label, exact=False).first
-                        if loc and loc.is_visible():
-                            loc.click()
-                            break
-                    page.wait_for_timeout(400)
-                except Exception:
-                    pass
-                time.sleep(0.3)
 
-            text = page.inner_text("body") or ""
-
-            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-                print("   • parsing claude usage numbers...")
-
-            if "sign in" in text.lower():
-                context.close()
-                return None
-
-            # Extra DOM attribute scraping (broadened)
+            # Single targeted wait (no blind get_by_text click loops).
             try:
-                extra = page.evaluate("""
-() => {
-  const out = [];
-  document.querySelectorAll('[aria-valuenow],[role=progressbar],progress,[data-*]').forEach(el => {
-    const v = el.getAttribute('aria-valuenow') || el.value || el.getAttribute('data-percent') || el.getAttribute('data-value') || (el.style && el.style.width) || '';
-    if (v) out.push('progress:' + String(v));
-  });
-  const w = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
-  let n;
-  while ((n = w.nextNode())) {
-    const t = (n.nodeValue || '').trim();
-    if (t.length > 0 && t.length < 200 && (/[0-9]/.test(t) || /%/.test(t))) out.push('txt:' + t);
-  }
-  document.querySelectorAll('h1,h2,h3,[class*="usage" i],[class*="limit" i],[class*="quota" i]').forEach(el => {
-    const t = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ');
-    if (t && (/[0-9]/.test(t) || /usage|limit|reset|fable|all models/i.test(t))) out.push('label:' + t);
-  });
-  return out.slice(0, 20);
-}
-""")
-                if extra:
-                    text += "\n" + "\n".join(extra)
+                page.wait_for_selector('[role="progressbar"], progress', timeout=8000)
             except Exception:
                 pass
 
-            result: dict[str, Any] = {
-                "source": "claude-web",
-                "fetched_at": time.time(),
-                "authenticated": True,
-            }
+            try:
+                final_url = getattr(page, "url", url) or url
+                page_title = page.title() or ""
+            except Exception:
+                final_url = url
+                page_title = ""
 
-            # Better structured scrape for Claude /settings/usage
-            # Separate All models (weekly) vs Fable, and 5h state.
-            # The site shows distinct % for "All models" and "Fable", plus reset times.
+            # Login wall check (after navigation).
+            try:
+                content = (page.content() or "").lower()
+            except Exception:
+                content = ""
+            looks_like_login_wall = ("sign in" in content) and ("usage" not in content[:2000])
+            if looks_like_login_wall:
+                context.close()
+                pl = ProviderLive(
+                    provider="claude",
+                    state=STATE_NEEDS_LOGIN,
+                    readings=[],
+                    fetched_at=now,
+                    error=None,
+                    note="login wall",
+                )
+                _LIVE_CACHE[ck] = {"ts": time.time(), "val": pl}
+                return pl
 
-            low = text.lower()
+            # Authenticated at this point.
+            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
+                print("   • collecting usage facts via DOM evaluate...")
 
-            # All models (the main weekly cloud pool) — use .*? to cross newlines/labels like "Resets Thu..."
-            m_all = re.search(r"(?i)all\s*models.*?(?P<pct>\d+(?:\.\d+)?)\s*%", text, re.S)
-            if m_all:
-                result["all_pct"] = float(m_all.group("pct"))
-            elif "all models" in low:
-                after = text[low.find("all models") :]
-                mp = re.search(r"(\d+(?:\.\d+)?)\s*%", after)
-                if mp:
-                    result["all_pct"] = float(mp.group(1))
+            # ONE evaluate collecting row dicts (progressbar containers + idle session blocks).
+            facts: dict[str, Any] = {"rows": []}
+            try:
+                facts = page.evaluate(
+                    """() => {
+  const rows = [];
+  const seen = new Set();
+  const barSel = '[role=progressbar], progress, [aria-valuenow]';
+  document.querySelectorAll(barSel).forEach(el => {
+    const vn = el.getAttribute('aria-valuenow') || (el.value != null ? String(el.value) : null);
+    const vm = el.getAttribute('aria-valuemax') || null;
+    let container = el.closest('section, li, [class*="card" i], [class*="usage" i], \
+[class*="row" i]') || el.parentElement || el;
+    // climb a few levels if needed
+    for (let i = 0; i < 3 && container && container.parentElement; i++) {
+      const p = container.parentElement;
+      const pc = (p.className || '').toString();
+      if (/section|li|card|usage|row/i.test(pc) || ['SECTION','LI'].indexOf(p.tagName) >= 0) {
+        container = p; break;
+      }
+      container = p;
+    }
+    const txt = (container && (container.innerText || container.textContent) || '').trim() \
+.replace(/\\s+/g, ' ').slice(0, 300);
+    let lb = '';
+    if (container) {
+      const heads = container.querySelectorAll('h1,h2,h3,h4,h5,strong,span,[class*="label" i], \
+[class*="heading" i]');
+      if (heads.length) lb = (heads[0].innerText || heads[0].textContent || '').trim() \
+.replace(/\\s+/g, ' ').slice(0, 120);
+    }
+    if (!lb) lb = txt.slice(0, 120);
+    const key = (txt || lb).slice(0, 80);
+    if (key && !seen.has(key)) { seen.add(key); rows.push({valuenow: vn, valuemax: vm, \
+ label: lb, text: txt}); }
+  });
+  // Also capture session/current containers that may lack a progressbar (idle 5h)
+  const csel = 'section, li, [class*="card" i], [class*="usage" i], [class*="row" i], \
+[class*="session" i]';
+  document.querySelectorAll(csel).forEach(el => {
+    const t = (el.innerText || el.textContent || '').trim() \
+.replace(/\\s+/g, ' ').slice(0, 300);
+    if (t && /(current\\s*session|session|5.?h|5-hour)/i.test(t)) {
+      const k = t.slice(0, 80);
+      if (!seen.has(k)) {
+        seen.add(k);
+        const hasBar = el.querySelector(barSel);
+        if (!hasBar) rows.push({valuenow: null, valuemax: null, label: 'Current session', text: t});
+      }
+    }
+  });
+  return {rows: rows.slice(0, 40)};
+}
+"""
+                )
+            except Exception:
+                facts = {"rows": []}
 
-            # Fable specific weekly
-            m_fab = re.search(r"(?i)\bfable\b.*?(?P<pct>\d+(?:\.\d+)?)\s*%", text, re.S)
-            if m_fab:
-                result["fable_pct"] = float(m_fab.group("pct"))
-            elif "fable" in low:
-                after = text[low.find("fable") :]
-                mp = re.search(r"(\d+(?:\.\d+)?)\s*%", after)
-                if mp:
-                    result["fable_pct"] = float(mp.group(1))
-
-            # Capture reset hints (e.g. "Resets Thu 9:00 PM")
-            reset_hit = re.search(
-                r"(?i)resets\s+([A-Za-z]{3,9}\s+\d{1,2}:\d{2}\s*(?:[AP]M)?)", text
-            )
-            if reset_hit:
-                result["reset_text"] = "Resets " + reset_hit.group(1).strip()
-
-            # 5h / current window state — the label and the "starts when..." may be on separate lines
-            m5 = re.search(
-                r"(?i)(5\s*h|5-hour|five.?hour|current[^.]*limit|5h)[^\n]{0,160}", text, re.S
-            )
-            if m5:
-                t5 = m5.group(0).strip()
-                result["five_hour_text"] = t5
-            # independent state probe (covers "Starts when a message is sent" on its own line)
-            if re.search(
-                r"start.*(message|sent)|starts when|when you send|idle until|begins (on|when)|not (yet )?active",
-                low,
-            ):
-                result["five_hour_state"] = "starts_on_first_message"
-                result["five_hour_pct"] = 0.0
-            elif m5:
-                t5 = result.get("five_hour_text", "")
-                mins = re.search(r"(\d+)\s*(minute|min)", t5, re.I)
-                if mins:
-                    result["five_hour_reset_in_secs"] = int(mins.group(1)) * 60
-                mp = re.search(r"(\d+(?:\.\d+)?)\s*%", t5)
-                if mp:
-                    result["five_hour_pct"] = float(mp.group(1))
-
-            # General fallback pcts (in case structure changes)
-            pcts = re.findall(r"(\d+(?:\.\d+)?)\s*%", text)
-            if pcts:
-                result["pcts_found"] = [float(x) for x in pcts[:6]]
-
-            context.close()
-            # Return even without specific data keys, so we can tell "authenticated but scrape didn't find numbers"
-
-            # Debug aid for Claude too
-            if (
-                "all_pct" not in result
-                and "fable_pct" not in result
-                and "five_hour_pct" not in result
-                and not result.get("five_hour_state")
-                and os.environ.get("TOKEN_ORACLE_LIVE_DEBUG")
-            ):
+            # Feed pure extractors (network first, then DOM rows).
+            readings: list = []
+            for u, obj in captured:
                 try:
-                    print(
-                        "[live-debug claude] authenticated but no mapped usage numbers.",
-                        file=sys.stderr,
-                    )
-                    with open("/tmp/token-oracle-claude-usage.txt", "w", encoding="utf-8") as df:
-                        df.write("URL: https://claude.ai/settings/usage\n")
-                        df.write("keys: " + str(list(result.keys())) + "\n\n")
-                        df.write(text or "")
+                    rs = claude_readings_from_network_json(u, obj, now)
+                    readings.extend(rs)
                 except Exception:
                     pass
 
-            val = result
+            try:
+                rows = facts.get("rows") or []
+                readings.extend(readings_from_rows(rows, now))
+            except Exception:
+                pass
+
+            try:
+                st = five_hour_state_from_rows(facts.get("rows") or [], now)
+                if st:
+                    readings.append(st)
+            except Exception:
+                pass
+
+            readings = merge_readings(readings)
+
+            # monotonic guard (claude provider key)
+            prev_snap = None
+            try:
+                from . import store as _store
+
+                prev_snap = _store.load_snapshot()
+            except Exception:
+                prev_snap = None
+            readings = monotonic_guard(readings, prev_snap, now, provider="claude")
+
+            note = f"landed on {final_url}"
+            pl = build_provider_live(
+                readings, authenticated=True, note=note, now=now, provider="claude"
+            )
+
+            # Debug dump retargeted to user-writable share dir.
+            if os.environ.get("TOKEN_ORACLE_LIVE_DEBUG"):
+                has_high = any(
+                    (
+                        r.confidence == "high"
+                        and r.metric in ("weekly_pct", "model_weekly_pct", "five_hour_pct")
+                    )
+                    for r in (pl.readings or [])
+                )
+                if not has_high:
+                    try:
+                        debug_dir = os.path.expanduser("~/.local/share/token-oracle/debug")
+                        os.makedirs(debug_dir, exist_ok=True)
+                        dump_path = os.path.join(debug_dir, "claude-usage.txt")
+                        sample = ""
+                        try:
+                            sample = (page.inner_text("body") or "")[:2200]
+                        except Exception:
+                            pass
+                        with open(dump_path, "w", encoding="utf-8") as df:
+                            df.write("URL: https://claude.ai/settings/usage (attempted)\n")
+                            df.write("final_url: " + str(final_url) + "\n")
+                            df.write("page_title: " + str(page_title) + "\n")
+                            df.write("fetched_at: " + str(now) + "\n")
+                            df.write("state: " + str(pl.state) + "\n")
+                            df.write("readings: " + str(len(pl.readings)) + "\n\n")
+                            df.write("=== ROWS ===\n" + str(facts.get("rows")) + "\n\n")
+                            df.write("=== SAMPLE BODY TEXT ===\n" + sample + "\n")
+                            df.write("\n=== CAPTURED JSON URLS ===\n")
+                            for uu, _ in captured[:5]:
+                                df.write(str(uu)[:120] + "\n")
+                    except Exception:
+                        pass
+
+            context.close()
+            _LIVE_CACHE[ck] = {"ts": time.time(), "val": pl}
+            return pl
 
     except Exception:
-        val = None
-
-    _LIVE_CACHE[ck] = {"ts": time.time(), "val": val}
-    return val
+        _LIVE_CACHE[ck] = {"ts": time.time(), "val": None}
+        return None
 
 
 def launch_login_session(provider: str = "grok", headless: bool = False) -> bool:
@@ -656,11 +734,9 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
         return False
 
     if provider.lower().startswith("grok"):
-        url = "https://grok.com"
         prof_name = "grok"
         display = "Grok"
     else:
-        url = "https://claude.ai"
         prof_name = "claude"
         display = "Claude"
 
@@ -668,7 +744,8 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
     prof_display = profile_dir.replace(os.path.expanduser("~"), "~")
 
     # Fast path — check BEFORE any "opening" message or browser launch.
-    # This makes re-running `oracle live-setup` completely silent for already-authenticated providers.
+    # This makes re-running `oracle live-setup` completely silent for
+    # already-authenticated providers.
     if _looks_logged_in(provider):
         print(f"✓ Already logged in for {display} (from previous session, no browser needed).")
         return True
@@ -720,13 +797,15 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
 
             if not headless:
                 print(
-                    "  1. A browser window should open (this is the one using the token-oracle profile)."
+                    "  1. A browser window should open (this is the one using the "
+                    "token-oracle profile)."
                 )
                 print("  2. Log in with your normal account if needed.")
                 print("  3. You should now see your usage numbers on the page.")
                 print("  4. Close the window when done, then press Enter here.")
                 print(
-                    "     This is a ONE-TIME step. Future `oracle live-setup` runs will detect the session and skip opening the browser."
+                    "     This is a ONE-TIME step. Future `oracle live-setup` runs will "
+                    "detect the session and skip opening the browser."
                 )
                 try:
                     input("\n[Press Enter after you have logged in (or if already logged in)] ")
@@ -748,10 +827,12 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
         if "closed" in err.lower() or "crashed" in err.lower() or "target page" in err.lower():
             print("   The browser was closed or crashed during launch.")
             print(
-                "   This can happen if you closed the window too early, or due to system Chrome issues."
+                "   This can happen if you closed the window too early, or due to "
+                "system Chrome issues."
             )
             print(
-                "   Run `oracle live-setup` again — it will skip providers that are already logged in."
+                "   Run `oracle live-setup` again — it will skip providers that "
+                "are already logged in."
             )
             return False
         if "X server" in err or "DISPLAY" in err or not os.environ.get("DISPLAY"):
@@ -761,7 +842,8 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
             print("   • ssh -X user@host   then run `oracle live-setup` (X11 forwarding)")
             print("   • On a machine with a GUI run `oracle live-setup`, then copy the profiles:")
             print(
-                "       rsync -av ~/.config/token-oracle/browser-profiles/ user@remote:~/.config/token-oracle/"
+                "       rsync -av ~/.config/token-oracle/browser-profiles/ "
+                "user@remote:~/.config/token-oracle/"
             )
             print("   • We tried to start a virtual Xvfb display (if Xvfb is installed).")
         else:
@@ -837,7 +919,7 @@ print(json.dumps(get_live_status()))
             data = fetcher(headless=True)
             if data:
                 data_by_name[name] = data
-                if name == "grok" and isinstance(data, ProviderLive):
+                if isinstance(data, ProviderLive):
                     st = data.state
                     fetches[name] = (
                         st
@@ -847,29 +929,6 @@ print(json.dumps(get_live_status()))
                     )
                     if data.fetched_at:
                         last = max(last or 0, data.fetched_at)
-                elif isinstance(data, dict):
-                    # claude or legacy dict path
-                    has_specific = (
-                        data.get("build_pct") is not None
-                        or data.get("overall_pct") is not None
-                        or data.get("all_pct") is not None
-                        or data.get("fable_pct") is not None
-                        or data.get("five_hour_pct") is not None
-                        or data.get("five_hour_state")
-                    )
-                    has_rate_data = data.get("query_remaining") is not None
-                    saw_raw_numbers = bool(data.get("pcts_found")) or has_specific or has_rate_data
-                    if has_specific:
-                        fetches[name] = "ok"
-                    elif data.get("authenticated"):
-                        if has_rate_data and not has_specific:
-                            fetches[name] = "rate_data_only"
-                        else:
-                            fetches[name] = "authenticated_no_data"
-                    else:
-                        fetches[name] = "needs_login"
-                    if data.get("fetched_at"):
-                        last = max(last or 0, data["fetched_at"])
                 else:
                     fetches[name] = "authenticated_no_data"
             else:
@@ -891,10 +950,6 @@ print(json.dumps(get_live_status()))
                 for r in d.readings or []:
                     if r.metric == "rate_window":
                         result[f"{name}_query_used_pct"] = r.value
-            elif isinstance(d, dict):
-                for k in ("query_remaining", "query_total", "query_window_secs", "query_used_pct"):
-                    if k in d:
-                        result[f"{name}_{k}"] = d[k]
     if all(v == "ok" for v in fetches.values()):
         result["message"] = "live web active"
     elif any(v == "rate_data_only" for v in fetches.values()):
@@ -932,25 +987,13 @@ def _looks_logged_in(provider: str) -> bool:
             return False
 
         if isinstance(data, ProviderLive):
-            # per plan: grok authenticated unless explicit needs/unavailable/error
+            # per plan: authenticated unless explicit needs/unavailable/error
             return data.state not in ("needs_login", "unavailable", "error")
 
-        # Authenticated (passed login wall) is enough to skip re-login in live-setup.
-        # We don't require the usage numbers to be parsed for the "one-time" skip.
-        if data.get("authenticated"):
+        # Legacy dict path (should no longer be reached after 031/032); keep minimal for safety.
+        if isinstance(data, dict) and data.get("authenticated"):
             return True
-
-        # Fallback: any usage data key present
-        keys = (
-            "build_pct",
-            "overall_pct",
-            "all_pct",
-            "fable_pct",
-            "five_hour_state",
-            "five_hour_reset_in_secs",
-            "five_hour_pct",
-        )
-        return any(data.get(k) is not None for k in keys)
+        return False
     except Exception:
         return False
 

@@ -216,29 +216,33 @@ def _doctor_lines(cfg, config_path, color, now):
                     elif cl in ("authenticated_no_data", "rate_data_only"):
                         raw = lw.fetch_claude_live_usage(headless=True)
                     if raw:
-                        sl = raw.get("scrape_len")
-                        pf = raw.get("pcts_found")
-                        note = raw.get("scrape_note")
-                        fu = raw.get("final_url")
-                        pt = raw.get("page_title")
-                        extra_info = []
-                        if sl:
-                            extra_info.append(f"{sl} chars")
-                        if pf:
-                            extra_info.append(f"pcts_found={pf[:3]}")
-                        if note:
-                            extra_info.append(note[:70])
-                        if fu:
-                            extra_info.append("url=" + str(fu)[:70])
-                        if pt:
-                            extra_info.append("title=" + str(pt)[:50])
-                        if raw.get("query_remaining") is not None:
-                            qrem = raw.get("query_remaining")
-                            qtot = raw.get("query_total")
-                            qw = raw.get("query_window_secs")
-                            extra_info.append(
-                                f"queries {qrem}/{qtot}" + (f" (window {qw}s)" if qw else "")
-                            )
+                        # Support both legacy dict (pre-031/032) and native ProviderLive
+                        if hasattr(raw, "note"):
+                            note = raw.note or ""
+                            fu = raw.note  # note often contains landed url
+                            extra_info = [f"state={raw.state}"]
+                            if note:
+                                extra_info.append(str(note)[:70])
+                            for r in (raw.readings or [])[:3]:
+                                extra_info.append(f"{r.metric}={r.value}")
+                        else:
+                            note = raw.get("scrape_note") if isinstance(raw, dict) else ""
+                            fu = raw.get("final_url") if isinstance(raw, dict) else ""
+                            pt = raw.get("page_title") if isinstance(raw, dict) else ""
+                            extra_info = []
+                            if note:
+                                extra_info.append(str(note)[:70])
+                            if fu:
+                                extra_info.append("url=" + str(fu)[:70])
+                            if pt:
+                                extra_info.append("title=" + str(pt)[:50])
+                            if isinstance(raw, dict) and raw.get("query_remaining") is not None:
+                                qrem = raw.get("query_remaining")
+                                qtot = raw.get("query_total")
+                                qw = raw.get("query_window_secs")
+                                extra_info.append(
+                                    f"queries {qrem}/{qtot}" + (f" (window {qw}s)" if qw else "")
+                                )
                         if extra_info:
                             out.append(
                                 colors.dim("            raw: " + " | ".join(extra_info), color)
