@@ -70,6 +70,29 @@ look in a real terminal (034's manual check could not run headless);
 percentages past the challenge; (3) blessed venv reinstalled editable
 against this repo — future merges propagate automatically.
 
+**Extended 2026-07-10 at `059ad33`** with plans 035–036: the headed-real-data
+round, opened after the operator observed the dash showing "no data
+(unavailable)" for both providers and asked for an easy "turn on real data"
+switch. Live investigation (systematic-debugging, verified on the operator's
+machine) proved the premise and found the real blockers:
+**headed mode DOES defeat claude.ai's Cloudflare wall** — a headed claude probe
+returns `state=ok` with real readings (weekly **58% Fable**, five-hour 16%) —
+but three bugs made it unreliable/untruthful:
+(RC-A) the Xvfb virtual display is started/torn-down *per provider fetch* while
+the `DISPLAY` env mutation persists globally, so in a multi-provider run the
+second provider (claude) launches onto the first's dead display and fails —
+proven by isolation (`claude` alone = ok, `claude` after `grok` = fail);
+(RC-C) the "started virtual display" message prints to **stdout**, corrupting
+`live-probe --json`; (RC-D) the swallowed `TargetClosedError` (no display) is
+mislabeled `needs_login` instead of an honest `unavailable`. Also confirmed
+(RC-B) grok's `settings/usage` redirects to the chat shell — grok has no usage
+% page, so `rate_data_only` is its *truthful* state (not fixed; documented).
+Dependency: **`xorg-server-xvfb` must be installed** for headed probing without
+a real display (operator installed it 2026-07-10; it's the portability answer
+for servers/SSH and stops browser windows popping up every 60s in the dash).
+Round order: **035 → 036** (sequential; 036 makes headed the persistent default
+and needs 035's working headed path + honest states first).
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
@@ -113,6 +136,9 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 033 | `oracle live-probe` — out-of-process probing, silent by construction | P1 | M | 030, 031, 032 | DONE — executed 2026-07-10 on advisor/033 @10afa18 (final). 1 commit/step (5 total). Baseline 179p/283s → 189p/1s (doctor tests now instant). New probe.py + tests (7+). Gates: pytest 0 fail; ruff/format/mypy clean on authored (pre-existing E501/B007/I001 + long lines + import sorts in untouched regions of cli/main.py listed in executor logs); greps 0 TOKEN_SILENT + 0 _LIVE_CACHE in web; bootstrap only in live-probe/live-setup; oracle live-probe --json emits clean JSON; doctor/dash instant no browser text. See PROGRESS.md. |
 | 034 | Dash — fixed-region scene renderer, honest provenance | P1 | L | 030, 033 (coordinates with 018) | DONE — executed 2026-07-10 on advisor/034-dash-fixed-region-scene @4208b1c (final). 1 commit/step (6 total). Baseline 189p → 194p. New scene.py + tests/test_scene.py (4 tests incl height-invariance) + app.py rewrite. Gates: pytest 0 fail (194); ruff/format/mypy clean on authored/rewritten (pre-existing errors only in untouched core/config.py: module_from_spec, dict/update); grep -n 2J only resize path in scene.py; height invariance + 3-line + provenance wording hold. Manual `oracle dash`: NOT RUN (no tty / isatty=False in executor env; could not be performed headlessly) — height-invariance tests + Painter smoke prove fixed layout/no jumps/alt restore. See PROGRESS.md. |
 
+| 035 | Headed display lifecycle — shared virtual display, never lie when no display | P1 | M | — | TODO (RC-A/C/D; verified live that headed claude → state=ok w/ real weekly 58% Fable) |
+| 036 | `oracle live on/off/status` — persistent real-data toggle + Xvfb guidance | P1 | M | 035 | TODO (env var → first-class config; dash inherits headed via default config) |
+
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
 ## Dependency notes
@@ -127,6 +153,8 @@ Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJE
 - **006 vs 004/005**: 006 deletes from `cache.py` (004 rewrites `save_cache` in the same file — non-overlapping regions, trivial rebase) and deletes `tests/test_cache.py::test_collect_and_window` (005 deliberately adds no cache tests — no collision).
 - **002 vs 003**: 003 re-captures the AGENTS.md doctor output blocks after changing the format; running 002 first is still correct.
 - **009 contains a human-only step** (create a fine-grained PAT and store it as the `RELEASE_PLEASE_TOKEN` repo secret) — an agent must not create tokens; the workflow change degrades gracefully if the secret is absent.
+- **036 requires 035**: 036 makes headed the persistent default; it only pays off once headed probing actually works end-to-end (RC-A) and reports honest states (RC-D). 035 and 036 touch disjoint files (035: `live/`; 036: `config.py`/`cli/main.py`), so no rebase conflict — but they are dispatched sequentially so 036 can verify against a working headed path.
+- **RC-B (grok usage % has no page) is not planned**: grok's `settings/usage` redirects to the chat shell; its real quota model is the rate window (~150 queries/2h), so `rate_data_only` is the truthful state. A future grok usage-endpoint discovery would be a separate extractor plan; the 036 toggle already probes grok headed so it would benefit automatically. Requires interactive exploration of the logged-in grok site (advisor spike), not a blind executor task.
 - **017 requires 016**: cost math needs per-model, per-class events; 016 defines the 8-field record 017 prices.
 - **019 requires 016+017+018**: it renders cost over v2 events inside 018's tab shell.
 - **020 requires 018** (fills the "future" placeholder); cost line lights up only if 017 landed; confidence suffix lights up only if 012 lands.
