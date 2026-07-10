@@ -56,6 +56,20 @@ tooling gotcha: fresh isolation worktrees provision from stale
 `origin/main`; rebase onto local `main` as dispatch step 0 (see plan 016's
 status note).
 
+**Round completed 2026-07-10 at `4509a22`**: 030–034 all DONE and merged
+(five Grok xhigh executors + two fix rounds + one polish child). Suite
+179→195 tests, wall time 283s→0.7s (probe leakage eliminated). Real-site
+verification: grok probe → `rate_data_only` (rate window quarantined, no
+fabricated weekly %); claude probe → `authenticated_no_data` because
+claude.ai serves a Cloudflare interstitial to headless browsers — the polish
+merge added challenge detection + wait + `TOKEN_ORACLE_LIVE_HEADED=1` headed
+mode (uses existing Xvfb helper; no fingerprint evasion). Repo-wide ruff +
+format + mypy now exit 0. Operator follow-ups: (1) 30s manual `oracle dash`
+look in a real terminal (034's manual check could not run headless);
+(2) try `TOKEN_ORACLE_LIVE_HEADED=1 oracle live-probe` to get real claude
+percentages past the challenge; (3) blessed venv reinstalled editable
+against this repo — future merges propagate automatically.
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
