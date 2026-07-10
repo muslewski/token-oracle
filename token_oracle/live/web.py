@@ -53,7 +53,6 @@ sync_playwright = None  # type: ignore
 PlaywrightTimeout = Exception  # type: ignore
 
 try:
-    from playwright.sync_api import TimeoutError as PlaywrightTimeout
     from playwright.sync_api import sync_playwright  # type: ignore
 
     PLAYWRIGHT_AVAILABLE = True
@@ -151,7 +150,10 @@ def _cached_fetch(key: str, fetcher, *a, **k):
 
 
 def get_browser_profile_dir(provider: str) -> str:
-    """Public helper: returns the persistent browser profile directory for a provider ('grok' or 'claude')."""
+    (
+        """Public helper: returns the persistent browser profile directory for a provider"""
+        " ('grok' or 'claude')."
+    )
     name = "grok" if provider.lower().startswith("grok") else "claude"
     base = os.path.expanduser("~/.config/token-oracle/browser-profiles")
     d = os.path.join(base, name)
@@ -353,8 +355,9 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
     let lb = '';
     const csel = 'section, li, [class*="card" i], [class*="usage" i], [class*="quota" i]';
     const anc = el.closest(csel) || el.parentElement || el;
-    if (anc) { lb = (anc.innerText || anc.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 120); }
-    bars.push({valuenow: vn, valuemax: vm, label: lb});
+    if (anc) { lb = (anc.innerText || anc.textContent || '').trim()."""
+                    "replace(/\\s+/g, ' ').slice(0, 120); }\n"
+                    """    bars.push({valuenow: vn, valuemax: vm, label: lb});
   });
   const labelAnc = new Set();
   document.querySelectorAll(barSel).forEach(el => {
@@ -578,15 +581,15 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> P
             facts: dict[str, Any] = {"rows": []}
             try:
                 facts = page.evaluate(
-                    """
-() => {
+                    """() => {
   const rows = [];
   const seen = new Set();
   const barSel = '[role=progressbar], progress, [aria-valuenow]';
   document.querySelectorAll(barSel).forEach(el => {
     const vn = el.getAttribute('aria-valuenow') || (el.value != null ? String(el.value) : null);
     const vm = el.getAttribute('aria-valuemax') || null;
-    let container = el.closest('section, li, [class*="card" i], [class*="usage" i], [class*="row" i]') || el.parentElement || el;
+    let container = el.closest('section, li, [class*="card" i], [class*="usage" i], \
+[class*="row" i]') || el.parentElement || el;
     // climb a few levels if needed
     for (let i = 0; i < 3 && container && container.parentElement; i++) {
       const p = container.parentElement;
@@ -596,20 +599,26 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> P
       }
       container = p;
     }
-    const txt = (container && (container.innerText || container.textContent) || '').trim().replace(/\\s+/g, ' ').slice(0, 300);
+    const txt = (container && (container.innerText || container.textContent) || '').trim() \
+.replace(/\\s+/g, ' ').slice(0, 300);
     let lb = '';
     if (container) {
-      const heads = container.querySelectorAll('h1,h2,h3,h4,h5,strong,span,[class*="label" i],[class*="heading" i]');
-      if (heads.length) lb = (heads[0].innerText || heads[0].textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 120);
+      const heads = container.querySelectorAll('h1,h2,h3,h4,h5,strong,span,[class*="label" i], \
+[class*="heading" i]');
+      if (heads.length) lb = (heads[0].innerText || heads[0].textContent || '').trim() \
+.replace(/\\s+/g, ' ').slice(0, 120);
     }
     if (!lb) lb = txt.slice(0, 120);
     const key = (txt || lb).slice(0, 80);
-    if (key && !seen.has(key)) { seen.add(key); rows.push({valuenow: vn, valuemax: vm, label: lb, text: txt}); }
+    if (key && !seen.has(key)) { seen.add(key); rows.push({valuenow: vn, valuemax: vm, \
+ label: lb, text: txt}); }
   });
   // Also capture session/current containers that may lack a progressbar (idle 5h)
-  const csel = 'section, li, [class*="card" i], [class*="usage" i], [class*="row" i], [class*="session" i]';
+  const csel = 'section, li, [class*="card" i], [class*="usage" i], [class*="row" i], \
+[class*="session" i]';
   document.querySelectorAll(csel).forEach(el => {
-    const t = (el.innerText || el.textContent || '').trim().replace(/\\s+/g, ' ').slice(0, 300);
+    const t = (el.innerText || el.textContent || '').trim() \
+.replace(/\\s+/g, ' ').slice(0, 300);
     if (t && /(current\\s*session|session|5.?h|5-hour)/i.test(t)) {
       const k = t.slice(0, 80);
       if (!seen.has(k)) {
@@ -725,11 +734,9 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
         return False
 
     if provider.lower().startswith("grok"):
-        url = "https://grok.com"
         prof_name = "grok"
         display = "Grok"
     else:
-        url = "https://claude.ai"
         prof_name = "claude"
         display = "Claude"
 
@@ -737,7 +744,8 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
     prof_display = profile_dir.replace(os.path.expanduser("~"), "~")
 
     # Fast path — check BEFORE any "opening" message or browser launch.
-    # This makes re-running `oracle live-setup` completely silent for already-authenticated providers.
+    # This makes re-running `oracle live-setup` completely silent for
+    # already-authenticated providers.
     if _looks_logged_in(provider):
         print(f"✓ Already logged in for {display} (from previous session, no browser needed).")
         return True
@@ -789,13 +797,15 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
 
             if not headless:
                 print(
-                    "  1. A browser window should open (this is the one using the token-oracle profile)."
+                    "  1. A browser window should open (this is the one using the "
+                    "token-oracle profile)."
                 )
                 print("  2. Log in with your normal account if needed.")
                 print("  3. You should now see your usage numbers on the page.")
                 print("  4. Close the window when done, then press Enter here.")
                 print(
-                    "     This is a ONE-TIME step. Future `oracle live-setup` runs will detect the session and skip opening the browser."
+                    "     This is a ONE-TIME step. Future `oracle live-setup` runs will "
+                    "detect the session and skip opening the browser."
                 )
                 try:
                     input("\n[Press Enter after you have logged in (or if already logged in)] ")
@@ -817,10 +827,12 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
         if "closed" in err.lower() or "crashed" in err.lower() or "target page" in err.lower():
             print("   The browser was closed or crashed during launch.")
             print(
-                "   This can happen if you closed the window too early, or due to system Chrome issues."
+                "   This can happen if you closed the window too early, or due to "
+                "system Chrome issues."
             )
             print(
-                "   Run `oracle live-setup` again — it will skip providers that are already logged in."
+                "   Run `oracle live-setup` again — it will skip providers that "
+                "are already logged in."
             )
             return False
         if "X server" in err or "DISPLAY" in err or not os.environ.get("DISPLAY"):
@@ -830,7 +842,8 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
             print("   • ssh -X user@host   then run `oracle live-setup` (X11 forwarding)")
             print("   • On a machine with a GUI run `oracle live-setup`, then copy the profiles:")
             print(
-                "       rsync -av ~/.config/token-oracle/browser-profiles/ user@remote:~/.config/token-oracle/"
+                "       rsync -av ~/.config/token-oracle/browser-profiles/ "
+                "user@remote:~/.config/token-oracle/"
             )
             print("   • We tried to start a virtual Xvfb display (if Xvfb is installed).")
         else:
