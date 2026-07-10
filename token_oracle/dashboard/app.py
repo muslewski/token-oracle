@@ -8,12 +8,12 @@ import subprocess
 import sys
 import threading
 import time
+from collections import deque
 
 from ..cli import colors as c
 from ..core.engine import detect_resets
 from ..core.engine import forecast as run_forecast
 from ..core.timeutil import fmt_dh_long, fmt_reset, fmt_tokens
-from ..live import web as lw
 from ..live.contract import (
     STATE_AUTH_NO_DATA,
     STATE_ERROR,
@@ -222,7 +222,7 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
     return lines
 
 
-def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=None):
+def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None):
     """Fixed-region dashboard frame (plan 034).
 
     Layout is always exactly:
@@ -232,6 +232,7 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
     The displayed % is live when cell.pct is not None, else local projection.
     Returns list[str] (use render_frame_str for tests expecting joined str).
     Drops prev_forecasts/live_status (reset detection stays in run()).
+    snapshot (optional) used for rate_info chips.
     """
     enabled = c.color_enabled() if color is None else color
 
@@ -248,10 +249,11 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
 
     def header_fill() -> list[str]:
         title = f"{c.M_ORACLE} token-oracle"
-        # compact per-provider chips (inferred from cells; rate detail enhanced in run)
+        # compact per-provider chips (inferred from cells; rate via rate_info when snapshot given)
         prov_map: dict[str, list] = {}
         for (pc, _wk), cell in (cells or {}).items():
             prov_map.setdefault(pc, []).append(cell)
+        rinfo = rate_info(snapshot) if snapshot is not None else {}
         chips: list[str] = []
         for pc in ("claude", "grok"):
             cs = prov_map.get(pc, [])
@@ -261,7 +263,12 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
                 age = int(getattr(live_c, "age_secs", 0) or 0)
                 chips.append(f"{pc} ● live {int(live_c.pct)}% ({age}s)")
             elif stt == STATE_RATE_DATA_ONLY:
-                chips.append(f"{pc} ▲ rate-only")
+                ri = rinfo.get(pc, {})
+                used = ri.get("used_pct")
+                if used is not None:
+                    chips.append(f"{pc} ▲ rate {int(used)}%")
+                else:
+                    chips.append(f"{pc} ▲ rate-only")
             else:
                 chips.append(f"{pc} ◌ no data ({stt})")
         status = "  •  ".join(chips)
@@ -316,25 +323,26 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
     return sc.render(w)
 
 
-def render_frame_str(forecasts, now, color=None, cells=None, probe_log=None, size=None):
+def render_frame_str(forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None):
     """Join wrapper for test convenience (old call sites expect str)."""
-    return "\n".join(render_frame(forecasts, now, color=color, cells=cells, probe_log=probe_log, size=size))
+    return "\n".join(render_frame(forecasts, now, color=color, cells=cells, probe_log=probe_log, size=size, snapshot=snapshot))
 
 
 def run(cfg):
-    """Live refreshing dashboard. Remembers prev state for reset detection + animation.
+    """Live refreshing dashboard using fixed-height scene + Painter (plan 034).
 
-    Probing happens in a daemon background thread via `oracle live-probe --json`
-    (or the blessed venv oracle). This run() only reads the snapshot file and
-    renders — no browser launch, no stdout pollution from progress.
+    The 033 probe worker runs in daemon thread and populates the live snapshot
+    (via live-probe) + captures its stderr tail for the activity region.
+    Every frame: load snapshot -> overlay_cells -> build/repaint via painter.
+    Resets feed the alert region (pulsed, then blank) without changing height.
+    Full clear ONLY on resize (handled by Painter); in-place \033[K per line.
     """
     last_fs = None
-    last_live_cells = None
-    last_live_st = None
-    LIVE_PROBE_INTERVAL = 60  # seconds; probes are 10-30s, avoid overlap
+    LIVE_PROBE_INTERVAL = 60
 
-    # last_probe_result guarded by simple assignment (daemon worker never prints)
-    last_probe_result = {"st": None, "stderr_tail": []}
+    # Ring buffer for probe stderr (routed to activity region). Worker writes lists
+    # but we normalize to deque for ring semantics.
+    last_probe_result = {"st": None, "stderr_tail": deque(maxlen=3)}
 
     def _probe_worker():
         try:
@@ -356,58 +364,44 @@ def run(cfg):
                         except Exception:
                             snap = None
                     last_probe_result["st"] = snap
-                    last_probe_result["stderr_tail"] = tail
+                    # keep as deque
+                    last_probe_result["stderr_tail"] = deque(tail, maxlen=3)
                 except Exception:
-                    # swallow (timeout, no binary, etc); next cycle will retry
+                    # swallow; next cycle retries
                     pass
                 time.sleep(LIVE_PROBE_INTERVAL)
         except Exception:
-            # daemon, never surface stack on shutdown
             pass
 
-    # start background prober immediately (daemon)
     worker = threading.Thread(target=_probe_worker, daemon=True, name="live-probe-worker")
     worker.start()
 
-    # first frame uses whatever snapshot exists right now (may be stale/unavailable — honest)
-    try:
-        while True:
-            t = time.time()
-            curr = run_forecast(t, cfg)
+    # Wrap entire refresh loop in Painter (alt screen + cursor hidden; restores on any exit)
+    with Painter() as painter:
+        try:
+            while True:
+                t = time.time()
+                curr = run_forecast(t, cfg)
 
-            # cheap read every frame; overlay decides what to show from provenance
-            snap = load_snapshot() or {}
-            last_live_cells = overlay_cells(curr, snap, t)
+                snap = load_snapshot() or {}
+                cells = overlay_cells(curr, snap, t)
+                probe_log = list(last_probe_result.get("stderr_tail") or [])
 
-            # derive minimal st for footer/src_note (render_frame untouched)
-            provs = snap.get("providers") or {}
-            if snap:
-                last_live_st = {
-                    "grok": (provs.get("grok") or {}).get("state", "unavailable"),
-                    "claude": (provs.get("claude") or {}).get("state", "unavailable"),
-                    "last_fetch": snap.get("written_at"),
-                    "last_attempt": snap.get("written_at"),
-                    "delegated": False,
-                    "message": "",
-                }
-            else:
-                last_live_st = None
+                # detect resets here (per plan: stays in run, feeds alert region for N ticks)
+                resets = detect_resets(last_fs, curr) if last_fs is not None else []
 
-            frame = render_frame(
-                curr,
-                t,
-                prev_forecasts=last_fs,
-                live_status=last_live_st,
-                cells=last_live_cells,
-            )
-            footer = c.dim("(ctrl-c to quit)  •  " + time.strftime("%H:%M:%S"), c.color_enabled())
-            # Robust redraw: full clear, then draw line-by-line with explicit clear-to-EOL.
-            print("\033[2J\033[H", end="")
-            for line in (frame + "\n\n" + footer).splitlines():
-                print(line + "\033[K", end="\n")
-            # reset attributes at end of frame
-            print("\033[0m", end="", flush=True)
-            last_fs = curr
-            time.sleep(1.2)  # snappier for live feel + alarm pulse
-    except KeyboardInterrupt:
-        return 0
+                # render base (fixed height, blank alert); override alert line if resets present
+                base = render_frame(curr, t, color=None, cells=cells, probe_log=probe_log, snapshot=snap)
+                if resets:
+                    names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
+                    banner = f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
+                    # alert line is at index HEADER_H (after 2 header lines); keep length
+                    if len(base) > HEADER_H:
+                        base[HEADER_H] = c.pulse(c.violet(banner, c.color_enabled()), c.color_enabled())
+
+                painter.paint(base)
+                last_fs = curr
+                time.sleep(1.2)
+        except KeyboardInterrupt:
+            # __exit__ of Painter runs on return (restores alt screen + cursor)
+            return 0
