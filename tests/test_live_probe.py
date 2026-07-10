@@ -145,3 +145,98 @@ def test_run_probe_error_state_for_all(tmp_path, monkeypatch):
     data = load_snapshot()
     assert data["providers"]["grok"]["state"] == "error"
     assert data["providers"]["claude"]["state"] == "error"
+
+
+def test_run_probe_headed_no_display_is_honest(tmp_path, monkeypatch):
+    """RC-D: headed + no display/Xvfb yields unavailable (never needs_login)."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    import token_oracle.live.probe as probe_mod
+    import token_oracle.live.web as web_mod
+
+    # Force no display and no Xvfb
+    monkeypatch.setattr(web_mod, "_has_graphical_display", lambda: False)
+    monkeypatch.setattr(web_mod.shutil, "which", lambda name: None)
+
+    def must_not_be_called(**kwargs):
+        raise AssertionError("fetch must not be called when no display for headed mode")
+
+    monkeypatch.setattr(probe_mod, "fetch_grok_live_usage", must_not_be_called)
+    monkeypatch.setattr(probe_mod, "fetch_claude_live_usage", must_not_be_called)
+
+    snap = run_probe(providers="all", headless=False)
+
+    assert "grok" in snap["providers"]
+    assert "claude" in snap["providers"]
+    for name in ("grok", "claude"):
+        p = snap["providers"][name]
+        assert p["state"] == "unavailable", f"{name} should be unavailable not {p['state']}"
+        assert "needs_login" not in p["state"]
+        note = p.get("note", "")
+        assert "Xvfb" in note or "display" in note.lower(), f"note should mention Xvfb: {note}"
+
+
+def test_run_probe_headed_shares_display_across_providers(tmp_path, monkeypatch):
+    """RC-A: one display for whole probe run; second provider still sees live DISPLAY."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.delenv("DISPLAY", raising=False)
+    monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+
+    import token_oracle.live.probe as probe_mod
+    import token_oracle.live.web as web_mod
+
+    monkeypatch.setattr(web_mod, "_has_graphical_display", lambda: False)
+
+    def _which_xvfb(name):
+        return "/usr/bin/Xvfb" if name == "Xvfb" else None
+
+    monkeypatch.setattr(web_mod.shutil, "which", _which_xvfb)
+
+    term_count = {"n": 0}
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+        def terminate(self):
+            term_count["n"] += 1
+
+    def fake_popen(*a, **k):
+        return FakeProc()
+
+    monkeypatch.setattr(web_mod.subprocess, "Popen", fake_popen)
+
+    grok_seen = []
+    claude_seen = []
+
+    def make_fetch(name, seen_list):
+        def f(**kwargs):
+            seen_list.append(os.environ.get("DISPLAY"))
+            # Return a minimal live result
+            from token_oracle.live.contract import ProviderLive
+
+            return ProviderLive(
+                provider=name,
+                state="ok" if name == "grok" else "rate_data_only",
+                readings=[],
+                fetched_at=0.0,
+            )
+
+        return f
+
+    monkeypatch.setattr(probe_mod, "fetch_grok_live_usage", make_fetch("grok", grok_seen))
+    monkeypatch.setattr(probe_mod, "fetch_claude_live_usage", make_fetch("claude", claude_seen))
+
+    snap = run_probe(providers="all", headless=False)
+
+    # Both fetches saw the same live display (would have been dead :99 without restore fix)
+    assert len(grok_seen) == 1 and grok_seen[0] == ":99"
+    assert len(claude_seen) == 1 and claude_seen[0] == ":99"
+    assert grok_seen[0] == claude_seen[0]
+    # Exactly one terminate for the whole run (not per-provider)
+    assert term_count["n"] == 1
+    # Snapshot has the results
+    assert snap["providers"]["grok"]["state"] in ("ok", "rate_data_only")
+    assert snap["providers"]["claude"]["state"] in ("ok", "rate_data_only")
