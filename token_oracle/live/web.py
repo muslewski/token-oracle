@@ -700,17 +700,19 @@ def fetch_claude_live_usage(
   document.querySelectorAll(barSel).forEach(el => {
     const vn = el.getAttribute('aria-valuenow') || (el.value != null ? String(el.value) : null);
     const vm = el.getAttribute('aria-valuemax') || null;
-    let container = el.closest('section, li, [class*="card" i], [class*="usage" i], \
-[class*="row" i]') || el.parentElement || el;
-    // climb a few levels if needed
-    for (let i = 0; i < 3 && container && container.parentElement; i++) {
+    // Climb to the MAXIMAL ancestor whose text has exactly one "%" — this is
+    // the atomic meter block (its own label + reset + "N% used"), NOT the
+    // merged multi-meter card. Prevents All-models and Fable collapsing to one row.
+    const pctCount = (s) => ((s || '').match(/%/g) || []).length;
+    let container = el.parentElement || el;
+    let best = container;
+    for (let i = 0; i < 6 && container && container.parentElement; i++) {
       const p = container.parentElement;
-      const pc = (p.className || '').toString();
-      if (/section|li|card|usage|row/i.test(pc) || ['SECTION','LI'].indexOf(p.tagName) >= 0) {
-        container = p; break;
-      }
-      container = p;
+      const t = (p.innerText || p.textContent || '');
+      if (pctCount(t) === 1 && t.length < 220) { best = p; container = p; }
+      else break;   // next level up would merge a second meter (or is too big)
     }
+    container = best;
     const txt = (container && (container.innerText || container.textContent) || '').trim() \
 .replace(/\\s+/g, ' ').slice(0, 300);
     let lb = '';
@@ -721,7 +723,7 @@ def fetch_claude_live_usage(
 .replace(/\\s+/g, ' ').slice(0, 120);
     }
     if (!lb) lb = txt.slice(0, 120);
-    const key = (txt || lb).slice(0, 80);
+    const key = txt;  // full text for dedup: distinct meters (e.g. 59% vs 99%) must not collapse
     if (key && !seen.has(key)) { seen.add(key); rows.push({valuenow: vn, valuemax: vm, \
  label: lb, text: txt}); }
   });
