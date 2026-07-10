@@ -24,8 +24,7 @@ from ..live.contract import (
 )
 from ..live.overlay import overlay_cells, rate_info
 from ..live.store import load_snapshot
-
-from .scene import Region, Scene, strip_ansi
+from .scene import Painter, Region, Scene
 
 BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
 
@@ -79,7 +78,7 @@ def panel_height(groups: dict) -> int:
         n = len(groups[pnames[0]])
         return _panel_block_height(n)
     total = 0
-    for pn, fs in groups.items():
+    for _pn, fs in groups.items():
         n = len(fs) or 1
         total += _panel_block_height(n)
         total += 1  # inter-block gap line
@@ -125,9 +124,7 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
     for f in sorted(forecasts, key=lambda x: x.window):
         wname = f.window
         is_idle = bool(getattr(f, "idle", False))
-        is_5h = (
-            "5h" in wname.lower() or "session" in wname.lower() or "current" in wname.lower()
-        )
+        is_5h = "5h" in wname.lower() or "session" in wname.lower() or "current" in wname.lower()
         wkey = None
         ww = (wname or "").lower()
         if ww in ("weekly", "week"):
@@ -141,7 +138,8 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
         glyph = _row_glyph(cell, is_idle)
 
         if is_idle:
-            # idle head: always show idle + reset (even 5h); special state_value only affects meta/provenance
+            # idle head: always show idle + reset (even 5h); special state_value only
+            # affects meta/provenance
             reset_str = _fmt_reset_abs(f.reset_in_secs, now)
             head = f"{glyph} {wname:<6} idle  resets {reset_str}"
             lines.append(c.box_line(head, width, enabled))
@@ -151,7 +149,8 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
                 meta = "   (5h window activates on first use; resets 5h later)"
                 lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
                 age = int(cell.age_secs) if getattr(cell, "age_secs", None) is not None else 0
-                # avoid "live" wording when this row does not carry a live pct number (0% placeholder)
+                # avoid "live" wording when this row does not carry a live pct number
+                # (0% placeholder)
                 prov = f"5h — from claude.ai ({age}s ago)" if age else "5h — from claude.ai"
                 lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
             elif is_5h:
@@ -284,8 +283,12 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
         pnames = list(groups.keys())
         out: list[str] = []
         if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
-            left = _render_profile_block(pnames[0], groups[pnames[0]], now, enabled, cells, width=60)
-            right = _render_profile_block(pnames[1], groups[pnames[1]], now, enabled, cells, width=60)
+            left = _render_profile_block(
+                pnames[0], groups[pnames[0]], now, enabled, cells, width=60
+            )
+            right = _render_profile_block(
+                pnames[1], groups[pnames[1]], now, enabled, cells, width=60
+            )
             maxl = max(len(left), len(right))
             left += [" " * 60] * (maxl - len(left))
             right += [" " * 60] * (maxl - len(right))
@@ -323,9 +326,21 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
     return sc.render(w)
 
 
-def render_frame_str(forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None):
+def render_frame_str(
+    forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None
+):
     """Join wrapper for test convenience (old call sites expect str)."""
-    return "\n".join(render_frame(forecasts, now, color=color, cells=cells, probe_log=probe_log, size=size, snapshot=snapshot))
+    return "\n".join(
+        render_frame(
+            forecasts,
+            now,
+            color=color,
+            cells=cells,
+            probe_log=probe_log,
+            size=size,
+            snapshot=snapshot,
+        )
+    )
 
 
 def run(cfg):
@@ -391,13 +406,17 @@ def run(cfg):
                 resets = detect_resets(last_fs, curr) if last_fs is not None else []
 
                 # render base (fixed height, blank alert); override alert line if resets present
-                base = render_frame(curr, t, color=None, cells=cells, probe_log=probe_log, snapshot=snap)
+                base = render_frame(
+                    curr, t, color=None, cells=cells, probe_log=probe_log, snapshot=snap
+                )
                 if resets:
                     names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
                     banner = f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
                     # alert line is at index HEADER_H (after 2 header lines); keep length
                     if len(base) > HEADER_H:
-                        base[HEADER_H] = c.pulse(c.violet(banner, c.color_enabled()), c.color_enabled())
+                        base[HEADER_H] = c.pulse(
+                            c.violet(banner, c.color_enabled()), c.color_enabled()
+                        )
 
                 painter.paint(base)
                 last_fs = curr

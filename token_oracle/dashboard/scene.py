@@ -7,8 +7,8 @@ full clear happens on terminal resize."""
 import re
 import shutil
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
@@ -83,9 +83,10 @@ class Painter:
         self.enter()
         return self
 
-    def __exit__(self, exc_type, exc, tb) -> bool:
+    def __exit__(self, exc_type, exc, tb) -> None:
         self.exit()
-        return False
+        # return None (falsy) so exceptions propagate; do not swallow
+        return None
 
     def enter(self) -> None:
         sys.stdout.write("\033[?1049h\033[?25l")
