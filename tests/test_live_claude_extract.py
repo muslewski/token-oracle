@@ -214,3 +214,107 @@ def test_is_bot_challenge_detects_cf_interstitial_and_ignores_normal_pages():
     assert is_bot_challenge("Grok - Usage", "limits and bars here") is False
     assert is_bot_challenge("", "normal body text without cf phrases") is False
     assert is_bot_challenge("Login", "sign in to continue") is False
+
+
+# --- Plan 037: Fable row separation tests using exact ground-truth captured 2026-07-10 ---
+
+
+def test_atomic_rows_emit_fable_high_conf():
+    """Atomic rows (fixed JS) yield weekly=59, model_weekly=99 (fable), 5h=23."""
+    now = time.time()
+    rows = [
+        {
+            "valuenow": "23",
+            "valuemax": "100",
+            "label": "Current session",
+            "text": "Current session Resets in 3 hr 21 min 23% used",
+        },
+        {
+            "valuenow": "59",
+            "valuemax": "100",
+            "label": "All models",
+            "text": "All models Resets Thu 9:00 PM 59% used",
+        },
+        {
+            "valuenow": "99",
+            "valuemax": "100",
+            "label": "Fable",
+            "text": "Fable Resets Thu 9:00 PM 99% used",
+        },
+        {
+            "valuenow": "0",
+            "valuemax": "100",
+            "label": "Usage credits",
+            "text": "€0.00 spent Resets Aug 1 0% used",
+        },
+    ]
+    rs = distinctness_check(readings_from_rows(rows, now))
+    week = [r for r in rs if r.metric == METRIC_WEEKLY_PCT]
+    model = [r for r in rs if r.metric == METRIC_MODEL_WEEKLY_PCT]
+    fiveh = [r for r in rs if r.metric == METRIC_FIVE_HOUR_PCT]
+    assert len(week) == 1
+    assert week[0].value == 59.0
+    assert week[0].model is None
+    assert week[0].confidence == CONF_HIGH
+    assert len(model) == 1
+    assert model[0].value == 99.0
+    assert model[0].model == "fable"
+    assert model[0].confidence == CONF_HIGH
+    assert len(fiveh) == 1
+    assert fiveh[0].value == 23.0
+    # credits row must not emit (0% is not a usage meter)
+    for r in rs:
+        ev = (r.evidence or "").lower()
+        assert not (r.value == 0.0 and ("credit" in ev or "0.00" in ev))
+
+
+def test_merged_row_still_yields_fable():
+    """Merged block still yields BOTH weekly=59 and model_weekly=99 (splitter)."""
+    now = time.time()
+    merged = [
+        {
+            "valuenow": "59",
+            "valuemax": "100",
+            "label": "Weekly limits",
+            "text": (
+                "Weekly limits Learn more about usage limits "
+                "All models Resets Thu 9:00 PM 59% used "
+                "Fable Resets Thu 9:00 PM 99% used"
+            ),
+        }
+    ]
+    rs = readings_from_rows(merged, now)
+    week = [r for r in rs if r.metric == METRIC_WEEKLY_PCT]
+    model = [r for r in rs if r.metric == METRIC_MODEL_WEEKLY_PCT]
+    assert len(week) == 1
+    assert week[0].value == 59.0
+    assert len(model) == 1
+    assert model[0].value == 99.0
+    assert model[0].model == "fable"
+    # defensive: even merged input yields the Fable reading (medium conf ok)
+    assert model[0].confidence in (CONF_HIGH, CONF_MEDIUM)
+
+
+def test_fable_and_all_models_distinct():
+    """When both present they are separate readings (59 vs 99) and distinctness_check keeps both."""
+    now = time.time()
+    rows = [
+        {
+            "valuenow": "59",
+            "valuemax": "100",
+            "label": "All models",
+            "text": "All models Resets Thu 9:00 PM 59% used",
+        },
+        {
+            "valuenow": "99",
+            "valuemax": "100",
+            "label": "Fable",
+            "text": "Fable Resets Thu 9:00 PM 99% used",
+        },
+    ]
+    rs = distinctness_check(readings_from_rows(rows, now))
+    week = [r for r in rs if r.metric == METRIC_WEEKLY_PCT]
+    model = [r for r in rs if r.metric == METRIC_MODEL_WEEKLY_PCT]
+    assert len(week) == 1 and len(model) == 1
+    assert week[0].value != model[0].value
+    assert week[0].evidence != model[0].evidence  # different rows
