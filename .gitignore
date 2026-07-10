@@ -7,3 +7,6 @@ dist/
 .superpowers/
 .venv/
 docs/superpowers/
+
+# nested linked worktrees (agent executors)
+.claude/worktrees/
