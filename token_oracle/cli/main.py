@@ -237,6 +237,7 @@ def main(argv=None):
         "dash",
         "init",
         "clean",
+        "live",
         "live-setup",
         "live-probe",
     ):
@@ -251,6 +252,8 @@ def main(argv=None):
             sp.add_argument("--force", action="store_true")
         if name == "clean":
             sp.add_argument("--yes", action="store_true")
+        if name == "live":
+            sp.add_argument("action", choices=["on", "off", "status"])
         if name == "live-probe":
             sp.add_argument("--provider", choices=["grok", "claude", "all"], default="all")
             sp.add_argument("--json", action="store_true")
