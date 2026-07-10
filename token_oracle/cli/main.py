@@ -279,6 +279,7 @@ def main(argv=None):
         "init",
         "clean",
         "live-setup",
+        "live-probe",
     ):
         sp = sub.add_parser(name)
         _add_common(sp)
@@ -291,6 +292,11 @@ def main(argv=None):
             sp.add_argument("--force", action="store_true")
         if name == "clean":
             sp.add_argument("--yes", action="store_true")
+        if name == "live-probe":
+            sp.add_argument(
+                "--provider", choices=["grok", "claude", "all"], default="all"
+            )
+            sp.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     now = _now(args)
@@ -348,23 +354,62 @@ def main(argv=None):
         print(tx.render(run_forecast(now, cfg)))
         return 0
     if args.cmd == "doctor":
-        _bootstrap_playwright_if_needed()
         print("⏳ oracle doctor — running checks")
-        print(
-            "   (live web: starting browser to read current usage from the sites — expect 10-30s)"
-        )
         lines, bad = _doctor_lines(cfg, args.config, colors.color_enabled(), now)
         for line in lines:
             print(line)
         return 0 if bad == 0 else 1
     if args.cmd == "dash":
-        # Ensure we are running inside the dedicated venv (with playwright)
-        # so that live web status/fetch is native + fast (in-process cache,
-        # no repeated expensive delegation subprocess per frame).
-        _bootstrap_playwright_if_needed()
         from ..dashboard.app import run as run_dash
 
         return run_dash(cfg)
+
+    if args.cmd == "live-probe":
+        _bootstrap_playwright_if_needed()
+        from ..live.probe import run_probe
+
+        prov = args.provider
+        snap = run_probe(
+            providers=prov,
+            headless=True,
+            progress=lambda m: print(m, file=sys.stderr),
+        )
+        if args.json:
+            print(json.dumps(snap, indent=2, default=str))
+        else:
+            # short human summary
+            for name in ("grok", "claude"):
+                if name in (snap.get("providers") or {}):
+                    p = (snap["providers"] or {}).get(name, {})
+                    st = p.get("state", "?")
+                    # pick a top reading if present
+                    readings = p.get("readings") or []
+                    top = ""
+                    for r in readings:
+                        if r.get("metric") in ("weekly_pct", "five_hour_pct", "model_weekly_pct"):
+                            val = r.get("value")
+                            if isinstance(val, (int, float)):
+                                top = f" {val:.1f}%"
+                                break
+                    age = ""
+                    fa = p.get("fetched_at")
+                    if fa:
+                        age = f" ({int(time.time() - fa)}s ago)"
+                    print(f"{name}: {st}{top}{age}")
+                else:
+                    print(f"{name}: not probed")
+        # exit codes per plan
+        states = []
+        for name in ("grok", "claude"):
+            p = (snap.get("providers") or {}).get(name, {})
+            states.append(p.get("state"))
+        has_ok = any(s in ("ok", "rate_data_only") for s in states if s)
+        has_needs = any(s == "needs_login" for s in states if s)
+        if has_ok:
+            return 0
+        if has_needs:
+            return 3
+        return 4
 
     if args.cmd == "live-setup":
         return _live_setup(cfg, args)
