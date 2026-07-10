@@ -196,7 +196,7 @@ def virtual_display(progress=None):
     if not shutil.which("Xvfb"):
         yield False
         return
-    prev = os.environ.get("DISPLAY")          # may be None
+    prev = os.environ.get("DISPLAY")  # may be None
     proc = None
     started_disp = None
     try:
@@ -204,9 +204,9 @@ def virtual_display(progress=None):
             disp = f":{disp_num}"
             try:
                 p = subprocess.Popen(
-                    ["Xvfb", disp, "-screen", "0", "1280x1024x24",
-                     "-ac", "-nolisten", "tcp"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                    ["Xvfb", disp, "-screen", "0", "1280x1024x24", "-ac", "-nolisten", "tcp"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
                 )
                 time.sleep(0.3)
                 if p.poll() is None:
@@ -868,7 +868,8 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
     with virtual_display() as _disp:
         # Default to Playwright's own bundled Chromium. It is the most reliable.
         # System Chrome often crashes on Linux (VAAPI, GTK modules, library mismatches).
-        # Set TOKEN_ORACLE_USE_SYSTEM_BROWSER=1 if you want to experiment with your installed Chrome.
+        # Set TOKEN_ORACLE_USE_SYSTEM_BROWSER=1 if you want to experiment
+        # with your installed Chrome.
         channel = None
         if os.environ.get("TOKEN_ORACLE_USE_SYSTEM_BROWSER"):
             for cand in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
@@ -951,7 +952,9 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
                 print("")
                 print("   Practical options for remote/no-GUI machines:")
                 print("   • ssh -X user@host   then run `oracle live-setup` (X11 forwarding)")
-                print("   • On a machine with a GUI run `oracle live-setup`, then copy the profiles:")
+                print(
+                    "   • On a machine with a GUI run `oracle live-setup`, then copy the profiles:"
+                )
                 print(
                     "       rsync -av ~/.config/token-oracle/browser-profiles/ "
                     "user@remote:~/.config/token-oracle/"
@@ -960,7 +963,6 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
             else:
                 print(f"   Could not launch browser: {e}")
             return False
-    # virtual_display ensures cleanup + DISPLAY restore; no xvfb_proc finally needed.
 
 
 def get_live_status(now: float | None = None) -> dict:

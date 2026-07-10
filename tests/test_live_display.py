@@ -45,7 +45,10 @@ def test_virtual_display_starts_and_restores_xvfb(monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
 
     # Fake which
-    monkeypatch.setattr(web.shutil, "which", lambda name: "/usr/bin/Xvfb" if name == "Xvfb" else None)
+    def _which_xvfb(name):
+        return "/usr/bin/Xvfb" if name == "Xvfb" else None
+
+    monkeypatch.setattr(web.shutil, "which", _which_xvfb)
 
     term_calls = []
     popen_calls = []
@@ -93,8 +96,10 @@ def test_virtual_display_no_display_no_xvfb(monkeypatch):
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
     monkeypatch.setattr(web.shutil, "which", lambda name: None)
 
-    popen_calls = []
-    monkeypatch.setattr(web.subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("Popen must not be called")) or None)
+    def _never_popen(*a, **k):
+        raise AssertionError("Popen must not be called when no Xvfb")
+
+    monkeypatch.setattr(web.subprocess, "Popen", _never_popen)
 
     with virtual_display() as disp:
         assert disp is False
@@ -112,6 +117,7 @@ def test_virtual_display_no_stdout(monkeypatch, capsys):
     class FakeProc:
         def poll(self):
             return None
+
         def terminate(self):
             pass
 

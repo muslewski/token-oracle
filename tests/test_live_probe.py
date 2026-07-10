@@ -148,7 +148,7 @@ def test_run_probe_error_state_for_all(tmp_path, monkeypatch):
 
 
 def test_run_probe_headed_no_display_is_honest(tmp_path, monkeypatch):
-    """RC-D regression: headed=True + no display/Xvfb must yield unavailable, never needs_login lie."""
+    """RC-D: headed + no display/Xvfb yields unavailable (never needs_login)."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -179,7 +179,7 @@ def test_run_probe_headed_no_display_is_honest(tmp_path, monkeypatch):
 
 
 def test_run_probe_headed_shares_display_across_providers(tmp_path, monkeypatch):
-    """RC-A regression at orchestrator: one virtual display for whole run; 2nd provider sees live DISPLAY."""
+    """RC-A: one display for whole probe run; second provider still sees live DISPLAY."""
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.delenv("DISPLAY", raising=False)
     monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
@@ -188,13 +188,18 @@ def test_run_probe_headed_shares_display_across_providers(tmp_path, monkeypatch)
     import token_oracle.live.web as web_mod
 
     monkeypatch.setattr(web_mod, "_has_graphical_display", lambda: False)
-    monkeypatch.setattr(web_mod.shutil, "which", lambda name: "/usr/bin/Xvfb" if name == "Xvfb" else None)
+
+    def _which_xvfb(name):
+        return "/usr/bin/Xvfb" if name == "Xvfb" else None
+
+    monkeypatch.setattr(web_mod.shutil, "which", _which_xvfb)
 
     term_count = {"n": 0}
 
     class FakeProc:
         def poll(self):
             return None
+
         def terminate(self):
             term_count["n"] += 1
 
@@ -211,12 +216,14 @@ def test_run_probe_headed_shares_display_across_providers(tmp_path, monkeypatch)
             seen_list.append(os.environ.get("DISPLAY"))
             # Return a minimal live result
             from token_oracle.live.contract import ProviderLive
+
             return ProviderLive(
                 provider=name,
                 state="ok" if name == "grok" else "rate_data_only",
                 readings=[],
                 fetched_at=0.0,
             )
+
         return f
 
     monkeypatch.setattr(probe_mod, "fetch_grok_live_usage", make_fetch("grok", grok_seen))
