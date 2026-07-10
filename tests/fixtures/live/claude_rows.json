@@ -1,0 +1,6 @@
+[
+  {"valuenow": "38", "valuemax": "100", "label": "All models", "text": "All models 38% used Resets Thu 9:00 PM"},
+  {"valuenow": "24", "valuemax": "100", "label": "Fable", "text": "Fable 24% used Resets Thu 9:00 PM"},
+  {"valuenow": null, "valuemax": null, "label": "New chat", "text": "Fable — our most capable model"},
+  {"valuenow": null, "valuemax": null, "label": "Current session", "text": "Current session Starts when you send a message"}
+]
