@@ -9,7 +9,7 @@ import time
 
 from .contract import STATE_ERROR, STATE_UNAVAILABLE, ProviderLive, provider_live_to_dict
 from .store import save_snapshot
-from .web import fetch_claude_live_usage, fetch_grok_live_usage
+from .web import fetch_claude_live_usage, fetch_grok_live_usage, virtual_display
 
 
 def run_probe(
@@ -32,7 +32,6 @@ def run_probe(
 
     snap_providers: dict[str, ProviderLive] = {}
 
-    from .web import virtual_display          # local import, mirrors existing style
     display_ok = True
     cm = virtual_display(progress) if not headless else contextlib.nullcontext(True)
     with cm as _disp:
