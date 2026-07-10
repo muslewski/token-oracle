@@ -314,3 +314,62 @@ def test_doctor_reads_fresh_snapshot_and_no_playwright(tmp_path, monkeypatch, ca
     assert "browser" not in out.lower() and "launching" not in out.lower()
     # rc reflects the data/config rows (not live); just ensure it ran
     assert rc in (0, 1)
+
+
+# --- plan 036: live on/off/status + config headed toggle ---
+
+
+def test_live_status_off_by_default(tmp_path, capsys):
+    # always use explicit --config tmp; never real user config
+    cfg_path = str(tmp_path / "c.json")
+    # no live key -> default OFF
+    rc = main(["live", "status", "--config", cfg_path])
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert "OFF" in out
+
+
+def test_live_on_persists(tmp_path):
+    cfg_path = str(tmp_path / "c.json")
+    # write minimal to avoid side effects
+    import json as _json
+    (tmp_path / "c.json").write_text(_json.dumps({"plan": "max20"}))
+
+    rc = main(["live", "on", "--config", cfg_path])
+    assert rc == 0
+    from token_oracle.core.config import load_config as _load
+    assert _load(cfg_path).headed_enabled() is True
+
+    rc = main(["live", "off", "--config", cfg_path])
+    assert rc == 0
+    assert _load(cfg_path).headed_enabled() is False
+
+
+def test_live_probe_honors_config_headed(tmp_path, monkeypatch):
+    monkeypatch.setenv("TOKEN_ORACLE_SKIP_BOOTSTRAP", "1")
+    monkeypatch.delenv("TOKEN_ORACLE_LIVE_HEADED", raising=False)
+
+    cfg_path = str(tmp_path / "c.json")
+    import json as _json
+    # headed true
+    (tmp_path / "c.json").write_text(_json.dumps({"live": {"headed": True}}))
+
+    calls = []
+    def fake_run_probe(**kwargs):
+        calls.append(kwargs)
+        return {"version": 1, "providers": {}}
+
+    import token_oracle.live.probe as pr
+    monkeypatch.setattr(pr, "run_probe", fake_run_probe)
+
+    rc = main(["live-probe", "--json", "--config", cfg_path])
+    assert rc in (0, 3, 4)  # depends on fake states, we care about call
+    assert len(calls) == 1
+    assert calls[0].get("headless") is False  # because headed=True in config, env unset
+
+    # now flip to false
+    (tmp_path / "c.json").write_text(_json.dumps({"live": {"headed": False}}))
+    calls.clear()
+    rc = main(["live-probe", "--json", "--config", cfg_path])
+    assert len(calls) == 1
+    assert calls[0].get("headless") is True
