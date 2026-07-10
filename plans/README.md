@@ -100,6 +100,24 @@ dropped. 037 fixes the collector to emit one atomic row per bar; it touches
 `live/web.py`+`claude_extract.py` (disjoint from 036's `config.py`+`cli/main.py`,
 so it can run in parallel).
 
+**Round completed 2026-07-10 at `98f364c`**: 035 → 036 → 037 all DONE and merged
+(three grok-xhigh executors, zero fix rounds — each passed advisor review +
+independent gate re-run on first submission). Suite 195→211 tests. The headed
+live path now works end-to-end and is proven against the real sites:
+`oracle live on` persists real (headed) probing; a headed claude probe returns
+`state=ok` with **`five_hour_pct`, `weekly_pct` (All models), and
+`model_weekly_pct` (Fable) as three distinct HIGH-confidence readings**; the dash
+overlay resolves `(claude,5h)=26`, `(claude,weekly)=60`, `(claude,fable)=99` from
+the real snapshot. grok remains truthfully `rate_data_only` (no usage-% page —
+RC-B, documented, not planned). Dependency installed this round:
+`xorg-server-xvfb` (headed probing without a real display; also stops browser
+windows popping up in the dash). Operator follow-ups: (1) 30s manual `oracle
+dash` look in a real terminal — Fable should show `● live 99%`; (2) note the
+`~/.local/bin/oracle` entrypoint gets clobbered by each executor's
+`pip install -e` (system-python user-site) — re-symlink it to the blessed venv
+(`~/.local/share/token-oracle/venv/bin/oracle`) if `oracle` ever
+`ModuleNotFoundError`s again.
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
@@ -145,7 +163,7 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 
 | 035 | Headed display lifecycle — shared virtual display, never lie when no display | P1 | M | — | DONE — executed 2026-07-10 by grok-xhigh on advisor/035 (7 commits), merged to main at `f337ca2`. Gates re-run by advisor: 201 passed (+6 tests), ruff/format/mypy clean on the 4 in-scope files, all done-criteria greps pass. **Behavioral proof**: headed `--provider all` → grok `rate_data_only` + **claude `ok` (3 readings) after grok** (the RC-A scenario that used to fail), stdout valid JSON (RC-C). Executor correctly used direct `STATE_UNAVAILABLE` where `build_provider_live` would have lied `needs_login`. |
 | 036 | `oracle live on/off/status` — persistent real-data toggle + Xvfb guidance | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/036 (7 commits), merged to main at `3611055`. Gates re-run by advisor: 208 passed (+7), ruff/format/mypy clean on its files. **Behavioral**: `live status`→OFF + display/Xvfb lines + last states; `live on`→writes `{"live":{"headed":true}}`, `headed_enabled()` True, shows "Run oracle dash" (Xvfb present, no warning); `live off`→False. `app.py` untouched (Step 4 correctly concluded dash inherits headed via the default config the spawned live-probe loads). |
-| 037 | Claude Fable weekly row separated from All-models (high-conf `model_weekly_pct`) | P1 | M | 035 | TODO — captured live: 4 aria bars (session 23 / All-models 59 / **Fable 99** / credits 0); collector climbs to merged card so Fable is lost; fix = maximal-single-% ancestor + defensive splitter. Disjoint files from 036. |
+| 037 | Claude Fable weekly row separated from All-models (high-conf `model_weekly_pct`) | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/037 (3 commits), merged to main at `98f364c`. Gates re-run by advisor: 211 passed (+3), ruff/format/mypy clean on its files (the 2 E501 in test_live_claude_extract.py:78,210 are pre-existing, confirmed on base). **LIVE PROOF (headed probe against the worktree)**: claude `ok`, `weekly_pct=60` (All models, HIGH) + `model_weekly_pct=99 model=fable` (HIGH) — clean per-meter evidence, no "Fabl" bleed. **Full overlay E2E on main**: `(claude,fable)` cell = 99.0 live, `(claude,weekly)`=60.0, `(claude,5h)`=26.0 — all high-conf applied. |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
