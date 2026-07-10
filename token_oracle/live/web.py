@@ -180,34 +180,6 @@ def _has_graphical_display() -> bool:
     return False
 
 
-def _maybe_start_virtual_display():
-    """If no real display, try to start Xvfb so headed Playwright can run.
-    Returns the Popen object (or None) so caller can clean it up.
-    """
-    if _has_graphical_display():
-        return None
-    if not shutil.which("Xvfb"):
-        return None
-    # Try to find a free display number
-    for disp_num in range(99, 150):
-        disp = f":{disp_num}"
-        try:
-            proc = subprocess.Popen(
-                ["Xvfb", disp, "-screen", "0", "1280x1024x24", "-ac", "-nolisten", "tcp"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            time.sleep(0.3)
-            if proc.poll() is None:  # still running
-                os.environ["DISPLAY"] = disp
-                print("  Started virtual display (Xvfb) for browser.")
-                return proc
-            proc.terminate()
-        except Exception:
-            pass
-    return None
-
-
 @contextlib.contextmanager
 def virtual_display(progress=None):
     """Ensure a usable display for a headed browser for the duration of the
@@ -276,7 +248,7 @@ def fetch_grok_live_usage(
     when playwright unavailable and delegation failed.
     Progress messages (if any) go to the progress callback or stderr; never stdout.
     """
-    # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False + _maybe_start_virtual_display()
+    # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False (display lifecycle owned by run_probe)
     if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         delegated = _delegate_to_blessed(
             "fetch_grok_live_usage", headless=headless, timeout_ms=timeout_ms
@@ -569,7 +541,7 @@ def fetch_claude_live_usage(
     when playwright unavailable and delegation failed.
     Uses short TTL cache keyed claude:{headless}.
     """
-    # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False + _maybe_start_virtual_display()
+    # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False (display lifecycle owned by run_probe)
     if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         delegated = _delegate_to_blessed(
             "fetch_claude_live_usage", headless=headless, timeout_ms=timeout_ms
@@ -891,108 +863,104 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
     print(f"   Using profile: {prof_display}")
     print("   (This login step is one-time only. Future runs of `oracle live-setup` will skip it.)")
 
-    xvfb_proc = _maybe_start_virtual_display()
+    # Use the shared virtual_display CM (RC-C: no stdout print; RC-A: restores DISPLAY on exit).
+    # For login (one-shot interactive) we still wrap so teardown is guaranteed.
+    with virtual_display() as _disp:
+        # Default to Playwright's own bundled Chromium. It is the most reliable.
+        # System Chrome often crashes on Linux (VAAPI, GTK modules, library mismatches).
+        # Set TOKEN_ORACLE_USE_SYSTEM_BROWSER=1 if you want to experiment with your installed Chrome.
+        channel = None
+        if os.environ.get("TOKEN_ORACLE_USE_SYSTEM_BROWSER"):
+            for cand in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
+                if shutil.which(cand):
+                    channel = "chrome"
+                    break
 
-    # Default to Playwright's own bundled Chromium. It is the most reliable.
-    # System Chrome often crashes on Linux (VAAPI, GTK modules, library mismatches).
-    # Set TOKEN_ORACLE_USE_SYSTEM_BROWSER=1 if you want to experiment with your installed Chrome.
-    channel = None
-    if os.environ.get("TOKEN_ORACLE_USE_SYSTEM_BROWSER"):
-        for cand in ("google-chrome", "google-chrome-stable", "chromium", "chromium-browser"):
-            if shutil.which(cand):
-                channel = "chrome"
-                break
+        try:
+            with sync_playwright() as p:
+                launch_kwargs = {
+                    "headless": headless,
+                    "args": [
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--no-sandbox",
+                    ],
+                    "viewport": {"width": 1280, "height": 800},
+                }
+                if channel:
+                    launch_kwargs["channel"] = channel
 
-    try:
-        with sync_playwright() as p:
-            launch_kwargs = {
-                "headless": headless,
-                "args": [
-                    "--disable-blink-features=AutomationControlled",
-                    "--disable-dev-shm-usage",
-                    "--no-sandbox",
-                ],
-                "viewport": {"width": 1280, "height": 800},
-            }
-            if channel:
-                launch_kwargs["channel"] = channel
+                context = p.chromium.launch_persistent_context(profile_dir, **launch_kwargs)
+                page = context.new_page()
 
-            context = p.chromium.launch_persistent_context(profile_dir, **launch_kwargs)
-            page = context.new_page()
-
-            # Go straight to the usage page so the user can verify the numbers immediately
-            usage_url = (
-                "https://grok.com/settings/usage"
-                if provider.lower().startswith("grok")
-                else "https://claude.ai/settings/usage"
-            )
-            page.goto(usage_url, wait_until="domcontentloaded", timeout=30000)
-
-            # We intentionally do NOT call webbrowser.open() here.
-            # The Playwright persistent context (with headless=False) is the one
-            # that uses the correct profile directory. Opening the system's default
-            # browser would log in to the wrong cookie jar and open a second window.
-
-            if not headless:
-                print(
-                    "  1. A browser window should open (this is the one using the "
-                    "token-oracle profile)."
+                # Go straight to the usage page so the user can verify the numbers immediately
+                usage_url = (
+                    "https://grok.com/settings/usage"
+                    if provider.lower().startswith("grok")
+                    else "https://claude.ai/settings/usage"
                 )
-                print("  2. Log in with your normal account if needed.")
-                print("  3. You should now see your usage numbers on the page.")
-                print("  4. Close the window when done, then press Enter here.")
+                page.goto(usage_url, wait_until="domcontentloaded", timeout=30000)
+
+                # We intentionally do NOT call webbrowser.open() here.
+                # The Playwright persistent context (with headless=False) is the one
+                # that uses the correct profile directory. Opening the system's default
+                # browser would log in to the wrong cookie jar and open a second window.
+
+                if not headless:
+                    print(
+                        "  1. A browser window should open (this is the one using the "
+                        "token-oracle profile)."
+                    )
+                    print("  2. Log in with your normal account if needed.")
+                    print("  3. You should now see your usage numbers on the page.")
+                    print("  4. Close the window when done, then press Enter here.")
+                    print(
+                        "     This is a ONE-TIME step. Future `oracle live-setup` runs will "
+                        "detect the session and skip opening the browser."
+                    )
+                    try:
+                        input("\n[Press Enter after you have logged in (or if already logged in)] ")
+                    except EOFError:
+                        pass
+                else:
+                    print("  Running under virtual display (no visible window on this machine).")
+                    print(f"  Please make sure you are logged in at {usage_url}.")
+                    try:
+                        input("\n[Press Enter when login is complete] ")
+                    except EOFError:
+                        pass
+
+                context.close()
+            print("✓ Login saved for " + display + ".")
+            return True
+        except Exception as e:
+            err = str(e)
+            if "closed" in err.lower() or "crashed" in err.lower() or "target page" in err.lower():
+                print("   The browser was closed or crashed during launch.")
                 print(
-                    "     This is a ONE-TIME step. Future `oracle live-setup` runs will "
-                    "detect the session and skip opening the browser."
+                    "   This can happen if you closed the window too early, or due to "
+                    "system Chrome issues."
                 )
-                try:
-                    input("\n[Press Enter after you have logged in (or if already logged in)] ")
-                except EOFError:
-                    pass
+                print(
+                    "   Run `oracle live-setup` again — it will skip providers that "
+                    "are already logged in."
+                )
+                return False
+            if "X server" in err or "DISPLAY" in err or not os.environ.get("DISPLAY"):
+                print("   No graphical display available for the browser.")
+                print("")
+                print("   Practical options for remote/no-GUI machines:")
+                print("   • ssh -X user@host   then run `oracle live-setup` (X11 forwarding)")
+                print("   • On a machine with a GUI run `oracle live-setup`, then copy the profiles:")
+                print(
+                    "       rsync -av ~/.config/token-oracle/browser-profiles/ "
+                    "user@remote:~/.config/token-oracle/"
+                )
+                print("   • We tried to start a virtual Xvfb display (if Xvfb is installed).")
             else:
-                print("  Running under virtual display (no visible window on this machine).")
-                print(f"  Please make sure you are logged in at {usage_url}.")
-                try:
-                    input("\n[Press Enter when login is complete] ")
-                except EOFError:
-                    pass
-
-            context.close()
-        print("✓ Login saved for " + display + ".")
-        return True
-    except Exception as e:
-        err = str(e)
-        if "closed" in err.lower() or "crashed" in err.lower() or "target page" in err.lower():
-            print("   The browser was closed or crashed during launch.")
-            print(
-                "   This can happen if you closed the window too early, or due to "
-                "system Chrome issues."
-            )
-            print(
-                "   Run `oracle live-setup` again — it will skip providers that "
-                "are already logged in."
-            )
+                print(f"   Could not launch browser: {e}")
             return False
-        if "X server" in err or "DISPLAY" in err or not os.environ.get("DISPLAY"):
-            print("   No graphical display available for the browser.")
-            print("")
-            print("   Practical options for remote/no-GUI machines:")
-            print("   • ssh -X user@host   then run `oracle live-setup` (X11 forwarding)")
-            print("   • On a machine with a GUI run `oracle live-setup`, then copy the profiles:")
-            print(
-                "       rsync -av ~/.config/token-oracle/browser-profiles/ "
-                "user@remote:~/.config/token-oracle/"
-            )
-            print("   • We tried to start a virtual Xvfb display (if Xvfb is installed).")
-        else:
-            print(f"   Could not launch browser: {e}")
-        return False
-    finally:
-        if xvfb_proc:
-            try:
-                xvfb_proc.terminate()
-            except Exception:
-                pass
+    # virtual_display ensures cleanup + DISPLAY restore; no xvfb_proc finally needed.
 
 
 def get_live_status(now: float | None = None) -> dict:
