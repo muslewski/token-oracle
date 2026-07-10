@@ -62,13 +62,21 @@ def _doctor_lines(cfg, config_path, color, now):
                 except Exception:
                     pass
             age_str = f"last {fmt_dur(last_age)} ago" if last_age is not None else "mixed"
-            data_row = ("data", f"profiles={len(cfg.profiles)} · {total_files} files, {total_evs} events, {age_str}", total_evs > 0 or True)
+            data_row = (
+                "data",
+                f"profiles={len(cfg.profiles)} · {total_files} files, {total_evs} events, {age_str}",
+                total_evs > 0 or True,
+            )
         else:
             src = get_source(cfg.source, cfg.source_opts)
             files, events = src.scan({}, now, HIST_SECS)
             if events:
                 age = fmt_dur(now - events[-1][0])
-                data_row = ("data", f"{len(files)} files, {len(events)} events, last {age} ago", True)
+                data_row = (
+                    "data",
+                    f"{len(files)} files, {len(events)} events, last {age} ago",
+                    True,
+                )
             else:
                 data_row = (
                     "data",
@@ -106,7 +114,11 @@ def _doctor_lines(cfg, config_path, color, now):
         win_desc = f"multi-profiles: {list(cfg.profiles.keys())}"
     rows = [
         config_row,
-        ("source", f"{cfg.source} (available: {', '.join(avail)})" + (" [multi]" if multi else ""), cfg.source in avail or multi),
+        (
+            "source",
+            f"{cfg.source} (available: {', '.join(avail)})" + (" [multi]" if multi else ""),
+            cfg.source in avail or multi,
+        ),
         data_row,
         cache_row,
         ("windows", win_desc, (len(cfg.windows) > 0) or multi),
@@ -126,16 +138,25 @@ def _doctor_lines(cfg, config_path, color, now):
     # show when we are using real cloud caps for claude (the actual source of truth)
     try:
         from token_oracle.core.config import load_claude_limits
+
         cl = load_claude_limits()
         if cl:
-            out.append(colors.dim("  limits   — real caps + weeklyResetAnchor from ~/.claude/usage-limits.json (exact resets)", color))
+            out.append(
+                colors.dim(
+                    "  limits   — real caps + weeklyResetAnchor from ~/.claude/usage-limits.json (exact resets)",
+                    color,
+                )
+            )
     except Exception:
         pass
 
     # Live web status (very visible so you know if it worked / if it tried)
     try:
-        from token_oracle.sources import live_web as lw
-        print("   → starting browser + loading live pages (step-by-step progress will appear below)...")
+        from token_oracle.live import web as lw
+
+        print(
+            "   → starting browser + loading live pages (step-by-step progress will appear below)..."
+        )
         st = lw.get_live_status()
         extra = ""
         ts = st.get("last_attempt") or st.get("last_fetch")
@@ -143,24 +164,52 @@ def _doctor_lines(cfg, config_path, color, now):
             age = int(time.time() - ts)
             extra = f" (attempted {age}s ago)"
         if st.get("claude") == "ok" and st.get("grok") == "ok":
-            out.append(colors.dim(f"  live     — ✓ ACTIVE (pulling real % + reset times from the websites){extra}", color))
+            out.append(
+                colors.dim(
+                    f"  live     — ✓ ACTIVE (pulling real % + reset times from the websites){extra}",
+                    color,
+                )
+            )
         elif st.get("claude") == "ok" or st.get("grok") == "ok":
-            out.append(colors.dim(f"  live     — partial (grok={st.get('grok')} claude={st.get('claude')}){extra}", color))
+            out.append(
+                colors.dim(
+                    f"  live     — partial (grok={st.get('grok')} claude={st.get('claude')}){extra}",
+                    color,
+                )
+            )
         elif getattr(lw, "_BLESSED_PYTHON", None) or getattr(lw, "PLAYWRIGHT_AVAILABLE", False):
             cl = st.get("claude", "?")
             gr = st.get("grok", "?")
             is_native = getattr(lw, "PLAYWRIGHT_AVAILABLE", False) and not st.get("delegated")
             prefix = "live web" if is_native else "live web (via dedicated venv)"
-            if cl == "authenticated_no_data" or gr == "authenticated_no_data" or cl == "rate_data_only" or gr == "rate_data_only":
+            if (
+                cl == "authenticated_no_data"
+                or gr == "authenticated_no_data"
+                or cl == "rate_data_only"
+                or gr == "rate_data_only"
+            ):
                 msg = "authenticated but no usage numbers parsed"
                 if gr == "rate_data_only" or cl == "rate_data_only":
                     msg = "live rate limit data (queries) but no build/weekly usage % parsed"
-                out.append(colors.dim(f"  {prefix}     — {msg} (grok={gr} claude={cl}){extra}", color))
-                out.append(colors.dim("            → scraper needs work (or re-run live-setup after fresh login)", color))
-                out.append(colors.dim("            → tip: TOKEN_ORACLE_LIVE_DEBUG=1 oracle doctor ; cat /tmp/token-oracle-*-usage.txt", color))
+                out.append(
+                    colors.dim(f"  {prefix}     — {msg} (grok={gr} claude={cl}){extra}", color)
+                )
+                out.append(
+                    colors.dim(
+                        "            → scraper needs work (or re-run live-setup after fresh login)",
+                        color,
+                    )
+                )
+                out.append(
+                    colors.dim(
+                        "            → tip: TOKEN_ORACLE_LIVE_DEBUG=1 oracle doctor ; cat /tmp/token-oracle-*-usage.txt",
+                        color,
+                    )
+                )
                 # Try one raw fetch to surface scrape diagnostics (len, pcts_found, note) for immediate grasp
                 try:
-                    from token_oracle.sources import live_web as lw
+                    from token_oracle.live import web as lw
+
                     raw = None
                     if gr in ("authenticated_no_data", "rate_data_only"):
                         raw = lw.fetch_grok_live_usage(headless=True)
@@ -173,23 +222,39 @@ def _doctor_lines(cfg, config_path, color, now):
                         fu = raw.get("final_url")
                         pt = raw.get("page_title")
                         extra_info = []
-                        if sl: extra_info.append(f"{sl} chars")
-                        if pf: extra_info.append(f"pcts_found={pf[:3]}")
-                        if note: extra_info.append(note[:70])
-                        if fu: extra_info.append("url=" + str(fu)[:70])
-                        if pt: extra_info.append("title=" + str(pt)[:50])
+                        if sl:
+                            extra_info.append(f"{sl} chars")
+                        if pf:
+                            extra_info.append(f"pcts_found={pf[:3]}")
+                        if note:
+                            extra_info.append(note[:70])
+                        if fu:
+                            extra_info.append("url=" + str(fu)[:70])
+                        if pt:
+                            extra_info.append("title=" + str(pt)[:50])
                         if raw.get("query_remaining") is not None:
                             qrem = raw.get("query_remaining")
                             qtot = raw.get("query_total")
                             qw = raw.get("query_window_secs")
-                            extra_info.append(f"queries {qrem}/{qtot}" + (f" (window {qw}s)" if qw else ""))
+                            extra_info.append(
+                                f"queries {qrem}/{qtot}" + (f" (window {qw}s)" if qw else "")
+                            )
                         if extra_info:
-                            out.append(colors.dim("            raw: " + " | ".join(extra_info), color))
+                            out.append(
+                                colors.dim("            raw: " + " | ".join(extra_info), color)
+                            )
                 except Exception:
                     pass
             else:
-                out.append(colors.dim(f"  {prefix}     — configured (grok={gr} claude={cl}){extra}", color))
-                out.append(colors.dim("            → run `oracle live-setup` to authenticate (or fix scraper)", color))
+                out.append(
+                    colors.dim(f"  {prefix}     — configured (grok={gr} claude={cl}){extra}", color)
+                )
+                out.append(
+                    colors.dim(
+                        "            → run `oracle live-setup` to authenticate (or fix scraper)",
+                        color,
+                    )
+                )
         else:
             out.append(colors.dim("  live     — not configured (run `oracle live-setup`)", color))
     except Exception:
@@ -200,7 +265,17 @@ def _doctor_lines(cfg, config_path, color, now):
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="token-oracle")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("forecast", "snapshot", "statusline", "tmux", "doctor", "dash", "init", "clean", "live-setup"):
+    for name in (
+        "forecast",
+        "snapshot",
+        "statusline",
+        "tmux",
+        "doctor",
+        "dash",
+        "init",
+        "clean",
+        "live-setup",
+    ):
         sp = sub.add_parser(name)
         _add_common(sp)
         if name == "forecast":
@@ -271,7 +346,9 @@ def main(argv=None):
     if args.cmd == "doctor":
         _bootstrap_playwright_if_needed()
         print("⏳ oracle doctor — running checks")
-        print("   (live web: starting browser to read current usage from the sites — expect 10-30s)")
+        print(
+            "   (live web: starting browser to read current usage from the sites — expect 10-30s)"
+        )
         lines, bad = _doctor_lines(cfg, args.config, colors.color_enabled(), now)
         for line in lines:
             print(line)
@@ -298,11 +375,15 @@ def _bootstrap_playwright_if_needed():
     """
     import subprocess
 
-    from ..sources import live_web
+    from ..live import web as live_web
 
     # Never bootstrap (or execve) when running under pytest — it would
     # either hang creating venvs or exec-replace the test runner process.
-    if os.environ.get("PYTEST_CURRENT_TEST") or "pytest" in sys.modules or os.environ.get("TOKEN_ORACLE_SKIP_BOOTSTRAP"):
+    if (
+        os.environ.get("PYTEST_CURRENT_TEST")
+        or "pytest" in sys.modules
+        or os.environ.get("TOKEN_ORACLE_SKIP_BOOTSTRAP")
+    ):
         return
 
     if getattr(live_web, "PLAYWRIGHT_AVAILABLE", False):
@@ -322,7 +403,11 @@ def _bootstrap_playwright_if_needed():
 
     # playwright
     try:
-        subprocess.check_call([venv_py, "-c", "import playwright"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.check_call(
+            [venv_py, "-c", "import playwright"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except Exception:
         print("→ Installing playwright + Chromium (this can take a minute or two)...")
         subprocess.check_call([venv_pip, "install", "playwright"])
@@ -330,7 +415,11 @@ def _bootstrap_playwright_if_needed():
 
     # the token-oracle package (creates the 'oracle' entrypoint in the venv)
     try:
-        subprocess.check_call([venv_py, "-c", "import token_oracle"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        subprocess.check_call(
+            [venv_py, "-c", "import token_oracle"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
     except Exception:
         print("→ Installing token-oracle (with live support) into the dedicated env ...")
         here = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -361,7 +450,7 @@ def _live_setup(cfg, args):
     4. After that `oracle dash` shows the real numbers from the websites.
     """
     import subprocess
-    from ..sources import live_web
+    from ..live import web as live_web
     from ..cli import colors as c
 
     # This makes it "just work" for community users on all kinds of systems
@@ -375,7 +464,10 @@ def _live_setup(cfg, args):
         live_web.get_browser_profile_dir(prov)
 
     if not getattr(live_web, "PLAYWRIGHT_AVAILABLE", False):
-        print(c.ok_badge(False, color) + " playwright not available. Try `pip install \"token-oracle[live]\"`")
+        print(
+            c.ok_badge(False, color)
+            + ' playwright not available. Try `pip install "token-oracle[live]"`'
+        )
         return 1
 
     print(c.ok_badge(True, color) + " playwright ready")
@@ -407,11 +499,15 @@ def _live_setup(cfg, args):
         print()
         print("Practical options:")
         print("  • Run `oracle live-setup` on a machine that has a GUI, then copy the profiles:")
-        print("      rsync -av ~/.config/token-oracle/browser-profiles/ user@remote:~/.config/token-oracle/")
+        print(
+            "      rsync -av ~/.config/token-oracle/browser-profiles/ user@remote:~/.config/token-oracle/"
+        )
         print("  • Use X11 forwarding: ssh -X user@host  then run `oracle live-setup`")
         print("  • We will try Xvfb (virtual display) automatically if available.")
         print()
-        print("Once the profiles on this machine have valid sessions, `oracle dash` will use real live data.")
+        print(
+            "Once the profiles on this machine have valid sessions, `oracle dash` will use real live data."
+        )
         return 0
 
     # Real login — only for providers that are not yet authenticated

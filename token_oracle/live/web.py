@@ -23,56 +23,84 @@ import shutil
 import subprocess
 import sys
 import time
-from typing import Optional, Dict, Any
+from typing import Any
 
 PLAYWRIGHT_AVAILABLE = False
 sync_playwright = None  # type: ignore
 PlaywrightTimeout = Exception  # type: ignore
 
 try:
-    from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeout  # type: ignore
+    from playwright.sync_api import TimeoutError as PlaywrightTimeout
+    from playwright.sync_api import sync_playwright  # type: ignore
+
     PLAYWRIGHT_AVAILABLE = True
 except ImportError:
     pass
 
 # Blessed venv for live features (created by live-setup bootstrap)
+# Detection is now lazy: importing this module must not spawn any subprocess.
 _BLESSED_VENV_PY = os.path.expanduser("~/.local/share/token-oracle/venv/bin/python")
 _BLESSED_PYTHON = None
-if not PLAYWRIGHT_AVAILABLE and os.path.isfile(_BLESSED_VENV_PY):
-    try:
-        out = subprocess.check_output(
-            [_BLESSED_VENV_PY, "-c", "import playwright; print('ok')"],
-            text=True, stderr=subprocess.DEVNULL, timeout=5
-        )
-        if "ok" in out:
-            _BLESSED_PYTHON = _BLESSED_VENV_PY
-    except Exception:
-        pass
+_BLESSED_CHECKED = False
+
+
+def _blessed_python():
+    """Return path to blessed python (if usable) or None. Performs the
+    one-time subprocess check only on first call; result cached in module
+    globals. This eliminates the import-time side effect.
+    """
+    global _BLESSED_PYTHON, _BLESSED_CHECKED
+    if _BLESSED_CHECKED:
+        return _BLESSED_PYTHON
+    _BLESSED_CHECKED = True
+    if not PLAYWRIGHT_AVAILABLE and os.path.isfile(_BLESSED_VENV_PY):
+        try:
+            out = subprocess.check_output(
+                [_BLESSED_VENV_PY, "-c", "import playwright; print('ok')"],
+                text=True,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+            if "ok" in out:
+                _BLESSED_PYTHON = _BLESSED_VENV_PY
+        except Exception:
+            pass
+    return _BLESSED_PYTHON
 
 
 def _delegate_to_blessed(func_name: str, **kwargs):
     """Run a fetch/lookup function in the blessed venv python and return the result."""
-    if not _BLESSED_PYTHON:
+    bp = _blessed_python()
+    if not bp:
         return None
     try:
         arg_json = json.dumps(kwargs)
         code = f"""
 import json
-from token_oracle.sources.live_web import {func_name}
+from token_oracle.live.web import {func_name}
 kwargs = json.loads({arg_json!r})
 data = {func_name}(**kwargs)
 print(json.dumps(data, default=str))
 """
-        out = subprocess.check_output([_BLESSED_PYTHON, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60)
+        out = subprocess.check_output(
+            [bp, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60
+        )
         return json.loads(out)
     except Exception:
         return None
 
+
 # Re-export for doctor / other modules
-__all__ = ["fetch_grok_live_usage", "fetch_claude_live_usage", "PLAYWRIGHT_AVAILABLE", "get_live_status", "launch_login_session"]
+__all__ = [
+    "fetch_grok_live_usage",
+    "fetch_claude_live_usage",
+    "PLAYWRIGHT_AVAILABLE",
+    "get_live_status",
+    "launch_login_session",
+]
 
 # Very small in-memory TTL cache so the live dash doesn't launch a full browser on every 1s tick.
-_LIVE_CACHE: Dict[str, Any] = {}
+_LIVE_CACHE: dict[str, Any] = {}
 _LIVE_TTL = 25  # seconds; refresh ~2x per minute is plenty for usage numbers
 
 
@@ -132,12 +160,13 @@ def _maybe_start_virtual_display():
             pass
     return None
 
+
 def _get_profile_dir(name: str) -> str:
     # legacy internal
     return get_browser_profile_dir(name)
 
 
-def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Optional[Dict[str, Any]]:
+def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> dict[str, Any] | None:
     """Fetch current Grok usage from grok.com Settings → Usage.
 
     Returns dict like:
@@ -145,7 +174,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
         "overall_pct": 1.0,
         "build_pct": 1.0,   # for "Grok build"
         "reset_in_secs": 3600*24*3 + ...,  # or None
-        "reset_at": "2026-07-17 ...", 
+        "reset_at": "2026-07-17 ...",
         "source": "grok-web",
         "fetched_at": time.time()
       }
@@ -153,7 +182,9 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
     Uses short TTL cache so live dashboard is not expensive.
     """
     if not PLAYWRIGHT_AVAILABLE:
-        return _delegate_to_blessed("fetch_grok_live_usage", headless=headless, timeout_ms=timeout_ms)
+        return _delegate_to_blessed(
+            "fetch_grok_live_usage", headless=headless, timeout_ms=timeout_ms
+        )
 
     ck = f"grok:{headless}"
     now = time.time()
@@ -165,7 +196,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
     profile_dir = _get_profile_dir("grok")
 
     try:
-        if not os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE'):
+        if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
             print("   • launching browser (Chromium) for grok.com ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
@@ -183,7 +214,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
             # content (like /settings/usage quota panel) on the first goto.
             # Warm the session on the main app first, then navigate to usage.
             # This greatly increases the chance the real usage numbers hydrate.
-            if not os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE'):
+            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
                 print("   • warming main grok.com page...")
             try:
                 page.goto("https://grok.com", wait_until="domcontentloaded", timeout=timeout_ms)
@@ -194,7 +225,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                 pass
 
             # Now go for the usage view
-            if not os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE'):
+            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
                 print("   • loading grok usage page and waiting for data...")
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
@@ -204,7 +235,8 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
             # Capture any JSON usage payloads that the app fetches in the background.
             # SPAs frequently load the authoritative numbers via XHR/fetch rather than
             # putting NN% directly in the initial DOM text.
-            captured_usage: Dict[str, Any] = {}
+            captured_usage: dict[str, Any] = {}
+
             def _on_response(resp):
                 try:
                     ct = resp.headers.get("content-type", "") or ""
@@ -215,9 +247,29 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                             # This catches rate limits, quotas, build usage etc even if URL doesn't hint.
                             for k, v in list(j.items())[:30]:
                                 kl = str(k).lower()
-                                if any(x in kl for x in ("usage", "limit", "quota", "percent", "reset", "used", "remaining", "build", "heavy", "weekly", "query", "rate", "token", "cap")):
+                                if any(
+                                    x in kl
+                                    for x in (
+                                        "usage",
+                                        "limit",
+                                        "quota",
+                                        "percent",
+                                        "reset",
+                                        "used",
+                                        "remaining",
+                                        "build",
+                                        "heavy",
+                                        "weekly",
+                                        "query",
+                                        "rate",
+                                        "token",
+                                        "cap",
+                                    )
+                                ):
                                     captured_usage[k] = v
-                                elif isinstance(v, (int, float)) or (isinstance(v, str) and re.search(r'\d', v)):
+                                elif isinstance(v, (int, float)) or (
+                                    isinstance(v, str) and re.search(r"\d", v)
+                                ):
                                     captured_usage.setdefault(k, v)
                             # nested shallow
                             for sub in list(j.values()):
@@ -227,6 +279,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                                             captured_usage.setdefault(k, v)
                 except Exception:
                     pass
+
             try:
                 page.on("response", _on_response)
             except Exception:
@@ -234,14 +287,22 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
 
             # If login wall, bail out. Be conservative...
             content = page.content().lower()
-            looks_like_login_wall = ("sign in" in content or "log in" in content) and ("usage" not in content and "limit" not in content[:3000] and "settings" not in content[:1500])
+            looks_like_login_wall = ("sign in" in content or "log in" in content) and (
+                "usage" not in content
+                and "limit" not in content[:3000]
+                and "settings" not in content[:1500]
+            )
             if looks_like_login_wall:
                 context.close()
                 val = None
             else:
                 # We got past the obvious login wall → consider authenticated.
                 # (We may still fail to parse the specific usage numbers.)
-                result: Dict[str, Any] = {"source": "grok-web", "fetched_at": time.time(), "authenticated": True}
+                result: dict[str, Any] = {
+                    "source": "grok-web",
+                    "fetched_at": time.time(),
+                    "authenticated": True,
+                }
 
                 # Give the SPA plenty of time + active interaction to surface the usage panel.
                 try:
@@ -262,7 +323,12 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                             except Exception:
                                 pass
                         # also try role-based or href-ish
-                        for sel in ('a[href*="usage"]', 'a[href*="limit"]', '[data-testid*="usage"]', 'button:has-text("Usage")'):
+                        for sel in (
+                            'a[href*="usage"]',
+                            'a[href*="limit"]',
+                            '[data-testid*="usage"]',
+                            'button:has-text("Usage")',
+                        ):
                             try:
                                 loc = page.locator(sel).first
                                 if loc and loc.is_visible():
@@ -270,7 +336,9 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                                     page.wait_for_timeout(300)
                             except Exception:
                                 pass
-                        page.wait_for_selector("text=/usage|limit|reset|build|super|weekly|quota/i", timeout=2000)
+                        page.wait_for_selector(
+                            "text=/usage|limit|reset|build|super|weekly|quota/i", timeout=2000
+                        )
                     except Exception:
                         pass
                     time.sleep(0.4)
@@ -285,14 +353,14 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                 # If we are still on the main chat shell (common SPA behavior), try opening
                 # the user menu / settings / Build section to surface the usage panel.
                 try:
-                    cur = (page.url or "")
+                    cur = page.url or ""
                     if "/settings" not in cur and "/usage" not in cur:
                         for sel in [
                             'button[aria-haspopup="menu"]',
                             '[aria-label*="user" i], [aria-label*="account" i], [aria-label*="profile" i]',
-                            'text=/Grok Build|Build Beta/i',
+                            "text=/Grok Build|Build Beta/i",
                             'a[href*="/settings"]',
-                            'text=Settings',
+                            "text=Settings",
                         ]:
                             try:
                                 loc = page.locator(sel).first
@@ -300,7 +368,13 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                                     loc.click()
                                     page.wait_for_timeout(400)
                                     # now click into usage/limits if submenu appeared
-                                    for us in ("Usage", "usage", "Limits", "limits", "Usage & limits"):
+                                    for us in (
+                                        "Usage",
+                                        "usage",
+                                        "Limits",
+                                        "limits",
+                                        "Usage & limits",
+                                    ):
                                         try:
                                             ul = page.get_by_text(us, exact=False).first
                                             if ul and ul.is_visible():
@@ -330,14 +404,17 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                     final_url = url
                     page_title = ""
 
-                if not os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE'):
+                if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
                     print("   • parsing grok usage numbers from page...")
                 text = page.inner_text("body") or page.content()
 
                 # Merge any JSON payloads we saw over the wire (often has the real % / reset)
                 if captured_usage:
                     try:
-                        text += "\n__CAPTURED_API__:" + json.dumps(captured_usage, separators=(',',':'))[:2800]
+                        text += (
+                            "\n__CAPTURED_API__:"
+                            + json.dumps(captured_usage, separators=(",", ":"))[:2800]
+                        )
                     except Exception:
                         pass
 
@@ -352,7 +429,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
 """)
                     if next_json:
                         try:
-                            flat = json.dumps(next_json, separators=(',',':'))[:4500]
+                            flat = json.dumps(next_json, separators=(",", ":"))[:4500]
                             text += "\n__NEXT_DATA__:" + flat
                         except Exception:
                             pass
@@ -394,11 +471,21 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                 low = text.lower()
 
                 # Try specific labels first for SuperGrok / Build / Heavy
-                for label in ("supergrok", "grok build", "build", "heavy", "weekly", "super grok", "grok 4", "advanced", "usage"):
+                for label in (
+                    "supergrok",
+                    "grok build",
+                    "build",
+                    "heavy",
+                    "weekly",
+                    "super grok",
+                    "grok 4",
+                    "advanced",
+                    "usage",
+                ):
                     idx = low.find(label)
                     if idx >= 0:
-                        after = text[idx: idx+220]
-                        mp = re.search(r'(\d+(?:\.\d+)?)\s*%', after)
+                        after = text[idx : idx + 220]
+                        mp = re.search(r"(\d+(?:\.\d+)?)\s*%", after)
                         if mp:
                             pct = float(mp.group(1))
                             if any(k in label for k in ("build", "heavy", "super", "advanced")):
@@ -408,28 +495,30 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
 
                 # Generic first % (augmented text now includes __NEXT + many more candidates)
                 if "overall_pct" not in result and "build_pct" not in result:
-                    m = re.search(r'(\d+(?:\.\d+)?)\s*%', text)
+                    m = re.search(r"(\d+(?:\.\d+)?)\s*%", text)
                     if m:
                         result["overall_pct"] = float(m.group(1))
 
                 # --- Richer parsers for modern Grok UI (fractions, progress vals, contextual %) ---
                 # Fractions e.g. "142 / 200" or "72/100 messages" near relevant keywords
                 frac_patterns = [
-                    r'(?i)(build|heavy|supergrok|super.?grok|grok.?build|advanced|weekly|usage|limit)[^\d\n]{0,40}(\d{1,4})\s*/\s*(\d{1,4})',
-                    r'(?i)(\d{1,4})\s*/\s*(\d{1,4})[^\d\n]{0,30}(build|heavy|weekly|usage|limit|quota)',
+                    r"(?i)(build|heavy|supergrok|super.?grok|grok.?build|advanced|weekly|usage|limit)[^\d\n]{0,40}(\d{1,4})\s*/\s*(\d{1,4})",
+                    r"(?i)(\d{1,4})\s*/\s*(\d{1,4})[^\d\n]{0,30}(build|heavy|weekly|usage|limit|quota)",
                 ]
                 for pat in frac_patterns:
                     fm = re.search(pat, text)
                     if fm:
                         try:
                             # groups vary; find the two numbers
-                            nums = re.findall(r'\d{1,4}', fm.group(0))
+                            nums = re.findall(r"\d{1,4}", fm.group(0))
                             if len(nums) >= 2:
                                 used, tot = float(nums[0]), float(nums[1])
                                 if tot > 0:
                                     pct = round(used / tot * 100.0, 1)
                                     grp = fm.group(0).lower()
-                                    if any(k in grp for k in ('build','heavy','super','advanced')):
+                                    if any(
+                                        k in grp for k in ("build", "heavy", "super", "advanced")
+                                    ):
                                         result.setdefault("build_pct", pct)
                                     else:
                                         result.setdefault("overall_pct", pct)
@@ -438,26 +527,32 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
 
                 # Parse progress:NN  (from aria-valuenow or style) — treat 0-100 as pct, 0-1 as fraction
                 # Also progressmax helps confirm scale
-                for line in re.findall(r'progress:[^\s]+', text):
+                for line in re.findall(r"progress:[^\s]+", text):
                     try:
-                        raw = line.split(':', 1)[1].rstrip('%').strip()
+                        raw = line.split(":", 1)[1].rstrip("%").strip()
                         num = float(raw)
                         if 0 < num <= 1.0:
                             num *= 100.0
                         if 0 < num <= 150:
                             result.setdefault("overall_pct", round(num, 1))
                             # if we also saw a build-ish label nearby in the text, prefer build
-                            if re.search(r'(?i)(build|heavy|super)', text[max(0, text.find(line)-80): text.find(line)+80] or ''):
+                            if re.search(
+                                r"(?i)(build|heavy|super)",
+                                text[max(0, text.find(line) - 80) : text.find(line) + 80] or "",
+                            ):
                                 result["build_pct"] = result["overall_pct"]
                     except Exception:
                         pass
 
                 # Contextual % with broader keywords (catches more label placements)
-                for m in re.finditer(r'(?i)(build|heavy|supergrok|super|weekly|usage|limit|quota|grok)[^%\n]{0,90}?(\d+(?:\.\d+)?)\s*%', text):
+                for m in re.finditer(
+                    r"(?i)(build|heavy|supergrok|super|weekly|usage|limit|quota|grok)[^%\n]{0,90}?(\d+(?:\.\d+)?)\s*%",
+                    text,
+                ):
                     try:
                         pct = float(m.group(2))
-                        lbl = (m.group(1) or '').lower()
-                        if any(k in lbl for k in ('build','heavy','super')):
+                        lbl = (m.group(1) or "").lower()
+                        if any(k in lbl for k in ("build", "heavy", "super")):
                             result["build_pct"] = pct
                         else:
                             result.setdefault("overall_pct", pct)
@@ -465,7 +560,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                         pass
 
                 # Always record any % we saw (like claude) for diagnostics
-                pcts = re.findall(r'(\d+(?:\.\d+)?)\s*%', text)
+                pcts = re.findall(r"(\d+(?:\.\d+)?)\s*%", text)
                 if pcts:
                     result.setdefault("pcts_found", [float(x) for x in pcts[:8]])
 
@@ -481,7 +576,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                     # also look for reset times in captured
                     for key in ("reset_in", "reset_secs", "reset_in_secs", "seconds_until_reset"):
                         v = captured_usage.get(key)
-                        if isinstance(v, (int, float)) and 100 < v < 86400*40:
+                        if isinstance(v, (int, float)) and 100 < v < 86400 * 40:
                             result.setdefault("reset_in_secs", int(v))
 
                     # Special case we actually saw in the wild: remainingQueries / totalQueries
@@ -489,12 +584,14 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                     rem = captured_usage.get("remainingQueries")
                     tot = captured_usage.get("totalQueries")
                     if isinstance(rem, (int, float)) and isinstance(tot, (int, float)) and tot > 0:
-                        used = round( (tot - rem) / tot * 100.0 , 1)
+                        used = round((tot - rem) / tot * 100.0, 1)
                         # Do NOT set overall_pct or build_pct from this.
                         # It is the short-term chat query rate limit (e.g. 2h window),
                         # not the weekly/build usage cap that the forecast tracks.
                         # We surface it for info only.
-                        result.setdefault("query_window_secs", captured_usage.get("windowSizeSeconds"))
+                        result.setdefault(
+                            "query_window_secs", captured_usage.get("windowSizeSeconds")
+                        )
                         result["query_remaining"] = int(rem)
                         result["query_total"] = int(tot)
                         result["query_used_pct"] = used  # informational only
@@ -504,22 +601,36 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                 result["final_url"] = final_url
                 result["page_title"] = page_title
                 if "build_pct" not in result and "overall_pct" not in result:
-                    result.setdefault("scrape_note", "loaded page + __NEXT + labels but no usage % or build quota numbers mapped")
+                    result.setdefault(
+                        "scrape_note",
+                        "loaded page + __NEXT + labels but no usage % or build quota numbers mapped",
+                    )
 
                 # Reset hints (broader window + more variants)
                 # Only trust a reset time if we actually saw a "reset(s)" keyword nearby
                 # or we have at least one usage % (otherwise we mis-parse "Thought for 2.5s" etc.)
-                reset_m = re.search(r'(?i)(reset|resets)[^\n]{0,140}', text)
+                reset_m = re.search(r"(?i)(reset|resets)[^\n]{0,140}", text)
                 if reset_m:
                     result["reset_text"] = reset_m.group(0).strip()
 
-                have_pct = bool(result.get("build_pct") or result.get("overall_pct") or result.get("pcts_found"))
+                have_pct = bool(
+                    result.get("build_pct") or result.get("overall_pct") or result.get("pcts_found")
+                )
                 if result.get("reset_text") or have_pct:
-                    rel = re.search(r'(?i)(?:in\s+)?(\d+)\s*(d|day|h|hr|hour|m|min|minute)', (result.get("reset_text", "") or "") + " " + text)
+                    rel = re.search(
+                        r"(?i)(?:in\s+)?(\d+)\s*(d|day|h|hr|hour|m|min|minute)",
+                        (result.get("reset_text", "") or "") + " " + text,
+                    )
                     if rel:
                         val = int(rel.group(1))
                         unit = rel.group(2).lower()
-                        secs = val * (86400 if "d" in unit or "day" in unit else 3600 if "h" in unit or "hr" in unit else 60)
+                        secs = val * (
+                            86400
+                            if "d" in unit or "day" in unit
+                            else 3600
+                            if "h" in unit or "hr" in unit
+                            else 60
+                        )
                         # only set if it looks like a real future reset window (a few minutes to ~30 days)
                         if 120 < secs < 86400 * 32:
                             result["reset_in_secs"] = secs
@@ -532,12 +643,21 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
                 # exactly what text/attributes/JSON the scraper observed on the live page.
                 # Run with TOKEN_ORACLE_LIVE_DEBUG=1 oracle dash   (or doctor) and then:
                 #   cat /tmp/token-oracle-grok-usage.txt
-                if ("build_pct" not in result and "overall_pct" not in result and
-                        os.environ.get("TOKEN_ORACLE_LIVE_DEBUG")):
+                if (
+                    "build_pct" not in result
+                    and "overall_pct" not in result
+                    and os.environ.get("TOKEN_ORACLE_LIVE_DEBUG")
+                ):
                     try:
                         sample = (text or "")[:2200]
-                        print("[live-debug grok] authenticated page loaded but no mapped usage % extracted.", file=sys.stderr)
-                        print("  (see /tmp/token-oracle-grok-usage.txt for the full captured text + __NEXT + labels)", file=sys.stderr)
+                        print(
+                            "[live-debug grok] authenticated page loaded but no mapped usage % extracted.",
+                            file=sys.stderr,
+                        )
+                        print(
+                            "  (see /tmp/token-oracle-grok-usage.txt for the full captured text + __NEXT + labels)",
+                            file=sys.stderr,
+                        )
                         with open("/tmp/token-oracle-grok-usage.txt", "w", encoding="utf-8") as df:
                             df.write("URL: https://grok.com/settings/usage (attempted)\n")
                             df.write("final_url: " + str(result.get("final_url")) + "\n")
@@ -565,14 +685,18 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Opt
         return None
 
 
-def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Optional[Dict[str, Any]]:
+def fetch_claude_live_usage(
+    headless: bool = True, timeout_ms: int = 15000
+) -> dict[str, Any] | None:
     """Fetch current Claude usage from claude.ai/settings/usage .
 
     Returns similar dict with 5h and weekly info.
     Uses TTL cache.
     """
     if not PLAYWRIGHT_AVAILABLE:
-        return _delegate_to_blessed("fetch_claude_live_usage", headless=headless, timeout_ms=timeout_ms)
+        return _delegate_to_blessed(
+            "fetch_claude_live_usage", headless=headless, timeout_ms=timeout_ms
+        )
 
     ck = f"claude:{headless}"
     nowt = time.time()
@@ -585,7 +709,7 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> O
 
     val = None
     try:
-        if not os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE'):
+        if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
             print("   • launching browser (Chromium) for claude.ai ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
@@ -595,7 +719,7 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> O
                 viewport={"width": 1100, "height": 800},
             )
             page = context.new_page()
-            if not os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE'):
+            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
                 print("   • loading claude.ai/settings/usage ...")
             page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
 
@@ -618,7 +742,7 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> O
 
             text = page.inner_text("body") or ""
 
-            if not os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE'):
+            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
                 print("   • parsing claude usage numbers...")
 
             if "sign in" in text.lower():
@@ -652,7 +776,11 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> O
             except Exception:
                 pass
 
-            result: Dict[str, Any] = {"source": "claude-web", "fetched_at": time.time(), "authenticated": True}
+            result: dict[str, Any] = {
+                "source": "claude-web",
+                "fetched_at": time.time(),
+                "authenticated": True,
+            }
 
             # Better structured scrape for Claude /settings/usage
             # Separate All models (weekly) vs Fable, and 5h state.
@@ -661,50 +789,57 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> O
             low = text.lower()
 
             # All models (the main weekly cloud pool) — use .*? to cross newlines/labels like "Resets Thu..."
-            m_all = re.search(r'(?i)all\s*models.*?(?P<pct>\d+(?:\.\d+)?)\s*%', text, re.S)
+            m_all = re.search(r"(?i)all\s*models.*?(?P<pct>\d+(?:\.\d+)?)\s*%", text, re.S)
             if m_all:
                 result["all_pct"] = float(m_all.group("pct"))
             elif "all models" in low:
-                after = text[low.find("all models"):]
-                mp = re.search(r'(\d+(?:\.\d+)?)\s*%', after)
+                after = text[low.find("all models") :]
+                mp = re.search(r"(\d+(?:\.\d+)?)\s*%", after)
                 if mp:
                     result["all_pct"] = float(mp.group(1))
 
             # Fable specific weekly
-            m_fab = re.search(r'(?i)\bfable\b.*?(?P<pct>\d+(?:\.\d+)?)\s*%', text, re.S)
+            m_fab = re.search(r"(?i)\bfable\b.*?(?P<pct>\d+(?:\.\d+)?)\s*%", text, re.S)
             if m_fab:
                 result["fable_pct"] = float(m_fab.group("pct"))
             elif "fable" in low:
-                after = text[low.find("fable"):]
-                mp = re.search(r'(\d+(?:\.\d+)?)\s*%', after)
+                after = text[low.find("fable") :]
+                mp = re.search(r"(\d+(?:\.\d+)?)\s*%", after)
                 if mp:
                     result["fable_pct"] = float(mp.group(1))
 
             # Capture reset hints (e.g. "Resets Thu 9:00 PM")
-            reset_hit = re.search(r'(?i)resets\s+([A-Za-z]{3,9}\s+\d{1,2}:\d{2}\s*(?:[AP]M)?)', text)
+            reset_hit = re.search(
+                r"(?i)resets\s+([A-Za-z]{3,9}\s+\d{1,2}:\d{2}\s*(?:[AP]M)?)", text
+            )
             if reset_hit:
                 result["reset_text"] = "Resets " + reset_hit.group(1).strip()
 
             # 5h / current window state — the label and the "starts when..." may be on separate lines
-            m5 = re.search(r'(?i)(5\s*h|5-hour|five.?hour|current[^.]*limit|5h)[^\n]{0,160}', text, re.S)
+            m5 = re.search(
+                r"(?i)(5\s*h|5-hour|five.?hour|current[^.]*limit|5h)[^\n]{0,160}", text, re.S
+            )
             if m5:
                 t5 = m5.group(0).strip()
                 result["five_hour_text"] = t5
             # independent state probe (covers "Starts when a message is sent" on its own line)
-            if re.search(r'start.*(message|sent)|starts when|when you send|idle until|begins (on|when)|not (yet )?active', low):
+            if re.search(
+                r"start.*(message|sent)|starts when|when you send|idle until|begins (on|when)|not (yet )?active",
+                low,
+            ):
                 result["five_hour_state"] = "starts_on_first_message"
                 result["five_hour_pct"] = 0.0
             elif m5:
                 t5 = result.get("five_hour_text", "")
-                mins = re.search(r'(\d+)\s*(minute|min)', t5, re.I)
+                mins = re.search(r"(\d+)\s*(minute|min)", t5, re.I)
                 if mins:
                     result["five_hour_reset_in_secs"] = int(mins.group(1)) * 60
-                mp = re.search(r'(\d+(?:\.\d+)?)\s*%', t5)
+                mp = re.search(r"(\d+(?:\.\d+)?)\s*%", t5)
                 if mp:
                     result["five_hour_pct"] = float(mp.group(1))
 
             # General fallback pcts (in case structure changes)
-            pcts = re.findall(r'(\d+(?:\.\d+)?)\s*%', text)
+            pcts = re.findall(r"(\d+(?:\.\d+)?)\s*%", text)
             if pcts:
                 result["pcts_found"] = [float(x) for x in pcts[:6]]
 
@@ -712,10 +847,18 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> O
             # Return even without specific data keys, so we can tell "authenticated but scrape didn't find numbers"
 
             # Debug aid for Claude too
-            if ("all_pct" not in result and "fable_pct" not in result and "five_hour_pct" not in result and
-                    not result.get("five_hour_state") and os.environ.get("TOKEN_ORACLE_LIVE_DEBUG")):
+            if (
+                "all_pct" not in result
+                and "fable_pct" not in result
+                and "five_hour_pct" not in result
+                and not result.get("five_hour_state")
+                and os.environ.get("TOKEN_ORACLE_LIVE_DEBUG")
+            ):
                 try:
-                    print("[live-debug claude] authenticated but no mapped usage numbers.", file=sys.stderr)
+                    print(
+                        "[live-debug claude] authenticated but no mapped usage numbers.",
+                        file=sys.stderr,
+                    )
                     with open("/tmp/token-oracle-claude-usage.txt", "w", encoding="utf-8") as df:
                         df.write("URL: https://claude.ai/settings/usage\n")
                         df.write("keys: " + str(list(result.keys())) + "\n\n")
@@ -799,7 +942,11 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
             page = context.new_page()
 
             # Go straight to the usage page so the user can verify the numbers immediately
-            usage_url = "https://grok.com/settings/usage" if provider.lower().startswith("grok") else "https://claude.ai/settings/usage"
+            usage_url = (
+                "https://grok.com/settings/usage"
+                if provider.lower().startswith("grok")
+                else "https://claude.ai/settings/usage"
+            )
             page.goto(usage_url, wait_until="domcontentloaded", timeout=30000)
 
             # We intentionally do NOT call webbrowser.open() here.
@@ -808,11 +955,15 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
             # browser would log in to the wrong cookie jar and open a second window.
 
             if not headless:
-                print("  1. A browser window should open (this is the one using the token-oracle profile).")
+                print(
+                    "  1. A browser window should open (this is the one using the token-oracle profile)."
+                )
                 print("  2. Log in with your normal account if needed.")
                 print("  3. You should now see your usage numbers on the page.")
                 print("  4. Close the window when done, then press Enter here.")
-                print("     This is a ONE-TIME step. Future `oracle live-setup` runs will detect the session and skip opening the browser.")
+                print(
+                    "     This is a ONE-TIME step. Future `oracle live-setup` runs will detect the session and skip opening the browser."
+                )
                 try:
                     input("\n[Press Enter after you have logged in (or if already logged in)] ")
                 except EOFError:
@@ -832,8 +983,12 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
         err = str(e)
         if "closed" in err.lower() or "crashed" in err.lower() or "target page" in err.lower():
             print("   The browser was closed or crashed during launch.")
-            print("   This can happen if you closed the window too early, or due to system Chrome issues.")
-            print("   Run `oracle live-setup` again — it will skip providers that are already logged in.")
+            print(
+                "   This can happen if you closed the window too early, or due to system Chrome issues."
+            )
+            print(
+                "   Run `oracle live-setup` again — it will skip providers that are already logged in."
+            )
             return False
         if "X server" in err or "DISPLAY" in err or not os.environ.get("DISPLAY"):
             print("   No graphical display available for the browser.")
@@ -841,7 +996,9 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
             print("   Practical options for remote/no-GUI machines:")
             print("   • ssh -X user@host   then run `oracle live-setup` (X11 forwarding)")
             print("   • On a machine with a GUI run `oracle live-setup`, then copy the profiles:")
-            print(f"       rsync -av ~/.config/token-oracle/browser-profiles/ user@remote:~/.config/token-oracle/")
+            print(
+                "       rsync -av ~/.config/token-oracle/browser-profiles/ user@remote:~/.config/token-oracle/"
+            )
             print("   • We tried to start a virtual Xvfb display (if Xvfb is installed).")
         else:
             print(f"   Could not launch browser: {e}")
@@ -869,24 +1026,41 @@ def get_live_status() -> dict:
     or empty results). This makes `oracle dash` clearly show that live web was tried.
     """
     attempt_at = time.time()
-    result = {"grok": "unavailable", "claude": "unavailable", "last_fetch": None, "last_attempt": attempt_at, "delegated": False, "message": ""}
+    result = {
+        "grok": "unavailable",
+        "claude": "unavailable",
+        "last_fetch": None,
+        "last_attempt": attempt_at,
+        "delegated": False,
+        "message": "",
+    }
     if not PLAYWRIGHT_AVAILABLE:
-        if _BLESSED_PYTHON:
+        bp = _blessed_python()
+        if bp:
             # Delegate the whole status call
             try:
                 code = """
 import json
-from token_oracle.sources.live_web import get_live_status
+from token_oracle.live.web import get_live_status
 print(json.dumps(get_live_status()))
 """
-                out = subprocess.check_output([_BLESSED_PYTHON, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60)
+                out = subprocess.check_output(
+                    [bp, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60
+                )
                 delegated = json.loads(out)
                 delegated["delegated"] = True
                 delegated["message"] = "using dedicated venv"
                 delegated.setdefault("last_attempt", time.time())
                 return delegated
             except Exception as e:
-                return {"grok": "error", "claude": "error", "last_fetch": None, "last_attempt": time.time(), "delegated": True, "message": f"delegation failed: {e}"}
+                return {
+                    "grok": "error",
+                    "claude": "error",
+                    "last_fetch": None,
+                    "last_attempt": time.time(),
+                    "delegated": True,
+                    "message": f"delegation failed: {e}",
+                }
         result["last_attempt"] = attempt_at
         return result
 
@@ -900,9 +1074,12 @@ print(json.dumps(get_live_status()))
             if data:
                 data_by_name[name] = data
                 has_specific = (
-                    data.get("build_pct") is not None or data.get("overall_pct") is not None or
-                    data.get("all_pct") is not None or data.get("fable_pct") is not None or
-                    data.get("five_hour_pct") is not None or data.get("five_hour_state")
+                    data.get("build_pct") is not None
+                    or data.get("overall_pct") is not None
+                    or data.get("all_pct") is not None
+                    or data.get("fable_pct") is not None
+                    or data.get("five_hour_pct") is not None
+                    or data.get("five_hour_state")
                 )
                 has_rate_data = data.get("query_remaining") is not None
                 saw_raw_numbers = bool(data.get("pcts_found")) or has_specific or has_rate_data
@@ -919,7 +1096,7 @@ print(json.dumps(get_live_status()))
                     last = max(last or 0, data["fetched_at"])
             else:
                 fetches[name] = "needs_login"
-        except Exception as e:
+        except Exception:
             fetches[name] = "error"
 
     result.update(fetches)
@@ -938,7 +1115,9 @@ print(json.dumps(get_live_status()))
     if all(v == "ok" for v in fetches.values()):
         result["message"] = "live web active"
     elif any(v == "rate_data_only" for v in fetches.values()):
-        result["message"] = "live rate limit data available (query window); no usage % parsed from settings"
+        result["message"] = (
+            "live rate limit data available (query window); no usage % parsed from settings"
+        )
     elif any(v == "authenticated_no_data" for v in fetches.values()):
         result["message"] = "authenticated but scraper found no usage numbers"
         # if one of the raw results had extra info, keep a short note
@@ -973,8 +1152,15 @@ def _looks_logged_in(provider: str) -> bool:
             return True
 
         # Fallback: any usage data key present
-        keys = ("build_pct", "overall_pct", "all_pct", "fable_pct",
-                "five_hour_state", "five_hour_reset_in_secs", "five_hour_pct")
+        keys = (
+            "build_pct",
+            "overall_pct",
+            "all_pct",
+            "fable_pct",
+            "five_hour_state",
+            "five_hour_reset_in_secs",
+            "five_hour_pct",
+        )
         return any(data.get(k) is not None for k in keys)
     except Exception:
         return False

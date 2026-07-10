@@ -93,7 +93,7 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 027 | Exploration 03: Instrument Panel — React + Motion (`explore/03-instrument-panel/`) | P2 | L | 024 | TODO |
 | 028 | Exploration 04: Particle Hourglass — Three.js (`explore/04-particle-hourglass/`) | P3 | L | 024 | TODO |
 | 029 | Exploration 05: Token Almanac — Swiss timetable (`explore/05-token-almanac/`) | P2 | M | 024 | TODO |
-| 030 | Truthful live-data contract — quarantine scraper out of the engine | P1 | L | — (needs WIP committed) | TODO |
+| 030 | Truthful live-data contract — quarantine scraper out of the engine | P1 | L | — (needs WIP committed) | DONE — executed 2026-07-10 on advisor/030-... @8c66948. 1 commit/step. Baseline 146p → 157p (fast post-purify). Gates executed (ruff/mypy report only pre-existing WIP errors in untouched files; our modules+new tests clean). Forecast smoke: fast, no "browser" text. See PROGRESS.md + commits b213bd5 etc. Updated live/ package, engine purified, dash via overlay only. |
 | 031 | Grok extractor — evidence-bound readings, no fabricated % | P1 | M | 030 | TODO |
 | 032 | Claude extractor — row-scoped, Fable ≠ All models | P1 | M | 030 (soft: 031) | TODO |
 | 033 | `oracle live-probe` — out-of-process probing, silent by construction | P1 | M | 030, 031, 032 | TODO |
