@@ -211,7 +211,9 @@ def _get_profile_dir(name: str) -> str:
     return get_browser_profile_dir(name)
 
 
-def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000, progress: ProgressFn | None = None) -> ProviderLive | None:
+def fetch_grok_live_usage(
+    headless: bool = True, timeout_ms: int = 15000, progress: ProgressFn | None = None
+) -> ProviderLive | None:
     """Fetch current Grok usage from grok.com Settings → Usage.
 
     Returns ProviderLive (state + evidence-bound LiveReadings) or None only
@@ -233,6 +235,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000, progre
                 return None
         return None
 
+    now = time.time()
     url = "https://grok.com/settings/usage"
     profile_dir = _get_profile_dir("grok")
 
@@ -446,7 +449,9 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000, progre
         return None
 
 
-def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000, progress: ProgressFn | None = None) -> ProviderLive | None:
+def fetch_claude_live_usage(
+    headless: bool = True, timeout_ms: int = 15000, progress: ProgressFn | None = None
+) -> ProviderLive | None:
     """Fetch current Claude usage from claude.ai/settings/usage.
 
     Returns ProviderLive (state + evidence-bound LiveReadings) or None only
@@ -468,6 +473,7 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000, prog
                 return None
         return None
 
+    now = time.time()
     url = "https://claude.ai/settings/usage"
     profile_dir = _get_profile_dir("claude")
 
@@ -874,16 +880,27 @@ def get_live_status(now: float | None = None) -> dict:
         if p in providers and isinstance(providers[p], dict):
             st = providers[p].get("state", "unavailable")
             # normalize to known strings if needed
-            result[p] = st if st in (
-                "ok", "rate_data_only", "authenticated_no_data", "needs_login", "error", "stale", "unavailable"
-            ) else "unavailable"
+            result[p] = (
+                st
+                if st
+                in (
+                    "ok",
+                    "rate_data_only",
+                    "authenticated_no_data",
+                    "needs_login",
+                    "error",
+                    "stale",
+                    "unavailable",
+                )
+                else "unavailable"
+            )
         else:
             result[p] = "unavailable"
 
     # propagate any rate info from the snapshot (for doctor/dash compat)
     for p in ("grok", "claude"):
         if p in providers and isinstance(providers[p], dict):
-            for r in (providers[p].get("readings") or []):
+            for r in providers[p].get("readings") or []:
                 if isinstance(r, dict) and r.get("metric") == "rate_window":
                     result[f"{p}_query_used_pct"] = r.get("value")
 

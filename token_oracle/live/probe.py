@@ -5,7 +5,7 @@ surface can be polluted by browser chatter.
 
 import time
 
-from .contract import ProviderLive, STATE_ERROR, provider_live_to_dict
+from .contract import STATE_ERROR, ProviderLive, provider_live_to_dict
 from .store import save_snapshot
 from .web import fetch_claude_live_usage, fetch_grok_live_usage
 
@@ -31,6 +31,11 @@ def run_probe(
     for name in prov_list:
         if name not in ("grok", "claude"):
             continue
+        if progress:
+            try:
+                progress(f"   • probing {name} ...")
+            except Exception:
+                pass
         try:
             if name == "grok":
                 pl = fetch_grok_live_usage(headless=headless, progress=progress)
@@ -49,6 +54,12 @@ def run_probe(
                     error=None,
                     note="no playwright data",
                 )
+            if progress:
+                try:
+                    st = snap_providers[name].state if name in snap_providers else "?"
+                    progress(f"   • {name} → {st}")
+                except Exception:
+                    pass
         except Exception as e:
             snap_providers[name] = ProviderLive(
                 provider=name,

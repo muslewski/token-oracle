@@ -150,9 +150,10 @@ def _doctor_lines(cfg, config_path, color, now):
     except Exception:
         pass
 
-    # Live web status — now snapshot-derived only (instant via get_live_status; no probe, no browser, no text leak)
+    # Live web status (snapshot-derived, instant, no probe/browser text)
     try:
         from token_oracle.live import web as lw
+
         from ..live.store import load_snapshot
 
         st = lw.get_live_status()
@@ -172,7 +173,7 @@ def _doctor_lines(cfg, config_path, color, now):
             if pst == "ok":
                 snap = load_snapshot() or {}
                 pdat = (snap.get("providers") or {}).get(pn, {})
-                for r in (pdat.get("readings") or []):
+                for r in pdat.get("readings") or []:
                     m = r.get("metric")
                     if m in ("weekly_pct", "five_hour_pct", "model_weekly_pct"):
                         val = r.get("value")
@@ -193,7 +194,7 @@ def _doctor_lines(cfg, config_path, color, now):
         elif gr == "unavailable" and cl == "unavailable":
             out.append(
                 colors.dim(
-                    "  live     — not probed yet (run oracle live-probe; oracle live-setup first if never logged in)",
+                    "  live     — not probed yet (run oracle live-probe; live-setup if needed)",
                     color,
                 )
             )
@@ -232,9 +233,7 @@ def main(argv=None):
         if name == "clean":
             sp.add_argument("--yes", action="store_true")
         if name == "live-probe":
-            sp.add_argument(
-                "--provider", choices=["grok", "claude", "all"], default="all"
-            )
+            sp.add_argument("--provider", choices=["grok", "claude", "all"], default="all")
             sp.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
@@ -437,9 +436,8 @@ def _live_setup(cfg, args):
     3. Headed browsers open for one-time login to grok.com and claude.ai
     4. After that `oracle dash` shows the real numbers from the websites.
     """
-    import subprocess
-    from ..live import web as live_web
     from ..cli import colors as c
+    from ..live import web as live_web
 
     # This makes it "just work" for community users on all kinds of systems
     _bootstrap_playwright_if_needed()

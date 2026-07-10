@@ -1,5 +1,8 @@
 import json
 import os
+import time as _time
+
+import pytest
 
 from token_oracle.cli.main import main
 
@@ -217,3 +220,97 @@ def test_clean_yes_removes(tmp_path, monkeypatch):
     # All three already absent → still exits 0, no exception (silently skipped).
     rc = main(["clean", "--config", cfg_path, "--yes"])
     assert rc == 0
+
+
+# --- plan 033 additions: live-probe subcommand + doctor snapshot path ---
+
+
+def test_live_probe_json_output_and_ok_exit(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("TOKEN_ORACLE_SKIP_BOOTSTRAP", "1")
+
+    def fake_ok(**k):
+        return {
+            "version": 1,
+            "written_at": 123456.0,
+            "providers": {
+                "grok": {
+                    "provider": "grok",
+                    "state": "ok",
+                    "readings": [{"metric": "weekly_pct", "value": 7.0, "extractor": "g.t"}],
+                }
+            },
+        }
+
+    import token_oracle.live.probe as pr
+
+    monkeypatch.setattr(pr, "run_probe", fake_ok)
+
+    rc = main(["live-probe", "--json"])
+    out = capsys.readouterr().out.strip()
+    data = json.loads(out)
+    assert data["version"] == 1
+    assert rc == 0  # has ok
+
+
+@pytest.mark.parametrize(
+    "fake_state,expected_rc",
+    [
+        ({"grok": {"state": "ok"}}, 0),
+        ({"grok": {"state": "rate_data_only"}}, 0),
+        ({"claude": {"state": "needs_login"}}, 3),
+        ({"grok": {"state": "error"}}, 4),
+    ],
+)
+def test_live_probe_exit_codes(tmp_path, monkeypatch, fake_state, expected_rc):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("TOKEN_ORACLE_SKIP_BOOTSTRAP", "1")
+
+    def fake(**k):
+        provs = {k: {"provider": k, **v} for k, v in fake_state.items()}
+        return {"version": 1, "written_at": 1.0, "providers": provs}
+
+    import token_oracle.live.probe as pr
+
+    monkeypatch.setattr(pr, "run_probe", fake)
+
+    rc = main(["live-probe", "--json"])
+    assert rc == expected_rc
+
+
+def test_doctor_reads_fresh_snapshot_and_no_playwright(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.setenv("TOKEN_ORACLE_SKIP_BOOTSTRAP", "1")
+
+    # pre-populate a fresh live snapshot (so get_live_status is instant)
+    live_dir = tmp_path / "token-oracle"
+    live_dir.mkdir(parents=True, exist_ok=True)
+    snap = {
+        "version": 1,
+        "written_at": _time.time(),
+        "providers": {
+            "grok": {
+                "provider": "grok",
+                "state": "ok",
+                "readings": [{"metric": "weekly_pct", "value": 4.2, "extractor": "g.w"}],
+            },
+            "claude": {"provider": "claude", "state": "authenticated_no_data", "readings": []},
+        },
+    }
+    (live_dir / "live.json").write_text(json.dumps(snap))
+
+    # ensure no playwright path is taken
+    import token_oracle.live.web as lwmod
+
+    monkeypatch.setattr(lwmod, "PLAYWRIGHT_AVAILABLE", False)
+    lwmod._BLESSED_PYTHON = None
+    lwmod._BLESSED_CHECKED = True
+
+    cfg = _cfg(tmp_path, [[_time.time() - 10.0, 5]], _time.time())
+    # must not raise even with playwright patched off
+    rc = main(["doctor", "--config", cfg, "--now", str(_time.time())])
+    out = capsys.readouterr().out
+    assert "grok" in out or "ok" in out or "live" in out  # contains state-ish output
+    assert "browser" not in out.lower() and "launching" not in out.lower()
+    # rc reflects the data/config rows (not live); just ensure it ran
+    assert rc in (0, 1)

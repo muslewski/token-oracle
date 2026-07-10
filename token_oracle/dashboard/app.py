@@ -416,9 +416,7 @@ def run(cfg):
                 else:
                     cmd = [sys.executable, "-m", "token_oracle.cli.main", "live-probe", "--json"]
                 try:
-                    proc = subprocess.run(
-                        cmd, capture_output=True, text=True, timeout=90
-                    )
+                    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
                     out = (proc.stdout or "").strip()
                     err = (proc.stderr or "").strip()
                     tail = [ln for ln in err.splitlines() if ln.strip()][-3:]
