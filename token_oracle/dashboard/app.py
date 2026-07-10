@@ -6,8 +6,9 @@ import os
 import time
 
 from ..cli import colors as c
-from ..core.engine import detect_resets, forecast as run_forecast
-from ..core.timeutil import fmt_dh_long, fmt_hms, fmt_reset, fmt_tokens
+from ..core.engine import detect_resets
+from ..core.engine import forecast as run_forecast
+from ..core.timeutil import fmt_dh_long, fmt_reset, fmt_tokens
 from ..live import web as lw
 from ..live.contract import (
     STATE_AUTH_NO_DATA,
@@ -17,8 +18,8 @@ from ..live.contract import (
     provider_live_to_dict,
 )
 from ..live.legacy import provider_live_from_legacy
-from ..live.overlay import LiveCell, overlay_cells
-from ..live.store import save_snapshot, load_snapshot
+from ..live.overlay import overlay_cells
+from ..live.store import save_snapshot
 
 BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
 
@@ -63,8 +64,6 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
     # to know if a live attempt happened even if this window has no pct data yet.
     st = st or {}
     top_live_attempted = bool(st.get("last_attempt"))
-    top_authenticated_no_data = (st.get("claude") == "authenticated_no_data" or
-                                 st.get("grok") == "authenticated_no_data")
 
     cells = cells or {}
     p_canon = "grok" if "grok" in pname.lower() else "claude"
@@ -72,49 +71,66 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
     for f in sorted(forecasts, key=lambda x: x.window):
         wname = f.window
         if f.idle:
-            is_5h = "5h" in wname.lower() or "session" in wname.lower() or "current" in wname.lower()
+            is_5h = (
+                "5h" in wname.lower() or "session" in wname.lower() or "current" in wname.lower()
+            )
             cell = cells.get((p_canon, "5h"))
             if is_5h and cell and cell.state_value == "starts_on_first_message":
-                # ONLY show the exact website phrasing when we actually have a (medium+) state reading.
-                # Do not fabricate from local idle alone.
+                # ONLY show website phrasing for medium+ state; no fabricate from local.
                 bar = _bar(0.0, enabled, BAR_W)
                 head = f"{c.M_BULLET} {wname:<6}  0% {bar} starts when a message is sent"
                 lines.append(c.box_line(head, width, enabled))
                 meta = "   (5h window activates on first use; resets 5h later)"
                 lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
                 age = int(cell.age_secs) if cell and cell.age_secs is not None else 0
-                prov5 = f"5h — live from claude.ai ({age}s ago)" if age else "5h — live from claude.ai"
+                prov5 = (
+                    f"5h — live from claude.ai ({age}s ago)" if age else "5h — live from claude.ai"
+                )
                 lines.append(c.box_line(c.dim("   " + prov5, enabled), width, enabled))
             elif is_5h:
                 # Honest local state: we don't know the exact server message yet.
-                line = f"{c.M_BULLET} {wname:<6} idle  resets {_fmt_reset_abs(f.reset_in_secs, now)}"
+                line = (
+                    f"{c.M_BULLET} {wname:<6} idle  resets {_fmt_reset_abs(f.reset_in_secs, now)}"
+                )
                 lines.append(c.box_line(c.dim(line, enabled), width, enabled))
-                lines.append(c.box_line(c.dim("   5h — no recent activity (live web will give exact status after login)", enabled), width, enabled))
+                lines.append(
+                    c.box_line(
+                        c.dim(
+                            "   5h — no recent activity (live web gives exact after login)",
+                            enabled,
+                        ),
+                        width,
+                        enabled,
+                    )
+                )
             else:
-                line = f"{c.M_BULLET} {wname:<6} idle  resets {_fmt_reset_abs(f.reset_in_secs, now)}"
+                line = (
+                    f"{c.M_BULLET} {wname:<6} idle  resets {_fmt_reset_abs(f.reset_in_secs, now)}"
+                )
                 lines.append(c.box_line(c.dim(line, enabled), width, enabled))
             continue
         # Derive primary display pct + provenance ONLY from cell (plan 030 contract).
         # Never recompute used from a live pct here.
         wkey = None
         ww = (wname or "").lower()
-        if ww in ("weekly", "week"): wkey = "weekly"
-        elif ww == "fable": wkey = "fable"
-        elif ww in ("5h", "5-hour", "session", "current"): wkey = "5h"
+        if ww in ("weekly", "week"):
+            wkey = "weekly"
+        elif ww == "fable":
+            wkey = "fable"
+        elif ww in ("5h", "5-hour", "session", "current"):
+            wkey = "5h"
         cell = cells.get((p_canon, wkey)) if wkey else None
         if cell and cell.pct is not None:
             display_pct = cell.pct
-            is_live_now = True
         else:
             display_pct = f.projected_pct
-            is_live_now = False
 
         bar = _bar(display_pct, enabled, BAR_W)
         pct_num = f"{round(display_pct):3d}%"
         # Key windows get BOLD % as requested: SuperGrok weekly, Claude weekly cloud, Fable
         is_key = (wname.lower() in ("weekly", "fable")) and (
-            ("grok" in pname.lower() and wname.lower() == "weekly") or
-            (pname.lower() in ("claude", "default") and wname.lower() in ("weekly", "fable"))
+            ("grok" in pname.lower() and wname.lower() == "weekly")
+            or (pname.lower() in ("claude", "default") and wname.lower() in ("weekly", "fable"))
         )
         pct_str = c.gauge(pct_num, display_pct, enabled)
         if (is_key or wname.lower() in ("5h", "session")) and enabled:
@@ -140,7 +156,12 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
             prov = f"live from {p_canon} ({age}s ago)"
             if cell.extractor:
                 prov += f" [{cell.extractor}]"
-        elif cell and cell.state in (STATE_AUTH_NO_DATA, STATE_RATE_DATA_ONLY, STATE_STALE, STATE_NEEDS_LOGIN):
+        elif cell and cell.state in (
+            STATE_AUTH_NO_DATA,
+            STATE_RATE_DATA_ONLY,
+            STATE_STALE,
+            STATE_NEEDS_LOGIN,
+        ):
             prov = f"no reliable live data ({cell.state})"
         else:
             # fallback to old-style labels when no cell at all (pure local render)
@@ -172,7 +193,7 @@ def render_frame(forecasts, now, color=None, prev_forecasts=None, live_status=No
     enabled = c.color_enabled() if color is None else color
     # group by profile (engine tags them)
     groups = {}
-    for f in (forecasts or []):
+    for f in forecasts or []:
         p = getattr(f, "profile", "default")
         groups.setdefault(p, []).append(f)
 
@@ -185,20 +206,24 @@ def render_frame(forecasts, now, color=None, prev_forecasts=None, live_status=No
     st = live_status or {}
     if not st:
         # cells=None path for pure tests: do not trigger any fetch here
-        st = {"grok": "unavailable", "claude": "unavailable", "message": "no live_status passed (pure render)"}
+        st = {
+            "grok": "unavailable",
+            "claude": "unavailable",
+            "message": "no live_status passed (pure render)",
+        }
 
     cl = st.get("claude", "unavailable")
     gr = st.get("grok", "unavailable")
     last = st.get("last_fetch")
     last_attempt = st.get("last_attempt") or last
     delegated = st.get("delegated", False)
-    msg = st.get("message", "")
 
     if cl == "ok" and gr == "ok":
         header = f"{c.M_ORACLE} token-oracle  •  LIVE WEB ACTIVE"
         ts = last_attempt or last
         if ts:
             import time as _t
+
             age = int(_t.time() - ts)
             header += f"  •  real data from grok.com + claude.ai (checked {age}s ago)"
         else:
@@ -212,20 +237,42 @@ def render_frame(forecasts, now, color=None, prev_forecasts=None, live_status=No
         if delegated:
             # Outer process using the dedicated venv via delegation
             header = f"{c.M_ORACLE} token-oracle  •  live web (via dedicated venv)"
-            if cl == "authenticated_no_data" or gr == "authenticated_no_data" or cl == "rate_data_only" or gr == "rate_data_only":
-                detail = "authenticated, but no usage numbers parsed yet (use TOKEN_ORACLE_LIVE_DEBUG=1 to inspect)"
+            if (
+                cl == "authenticated_no_data"
+                or gr == "authenticated_no_data"
+                or cl == "rate_data_only"
+                or gr == "rate_data_only"
+            ):
+                detail = (
+                    "authenticated, but no usage numbers parsed yet "
+                    "(use TOKEN_ORACLE_LIVE_DEBUG=1 to inspect)"
+                )
                 if gr == "rate_data_only" or cl == "rate_data_only":
-                    detail = "live rate limit data (queries), but no build/weekly usage % (use DEBUG to inspect)"
+                    detail = (
+                        "live rate limit data (queries), but no build/weekly "
+                        "usage % (use DEBUG to inspect)"
+                    )
                 header += f"  •  {detail}"
             else:
                 header += f"  •  configured (grok={gr} claude={cl})"
         elif lw.PLAYWRIGHT_AVAILABLE:
             # Native playwright available (best case: we are inside the dedicated venv)
             header = f"{c.M_ORACLE} token-oracle  •  live web"
-            if cl == "authenticated_no_data" or gr == "authenticated_no_data" or cl == "rate_data_only" or gr == "rate_data_only":
-                detail = "authenticated to sites, but no usage numbers parsed yet (TOKEN_ORACLE_LIVE_DEBUG=1 dumps the DOM text)"
+            if (
+                cl == "authenticated_no_data"
+                or gr == "authenticated_no_data"
+                or cl == "rate_data_only"
+                or gr == "rate_data_only"
+            ):
+                detail = (
+                    "authenticated to sites, but no usage numbers parsed yet "
+                    "(TOKEN_ORACLE_LIVE_DEBUG=1 dumps the DOM text)"
+                )
                 if gr == "rate_data_only" or cl == "rate_data_only":
-                    detail = "live rate limit data (queries), but no build/weekly usage % (DEBUG for details)"
+                    detail = (
+                        "live rate limit data (queries), but no build/weekly "
+                        "usage % (DEBUG for details)"
+                    )
                 header += f"  •  {detail}"
             else:
                 header += "  •  ready (no data from live web yet)"
@@ -247,14 +294,29 @@ def render_frame(forecasts, now, color=None, prev_forecasts=None, live_status=No
             live_line += f"✓ claude  ✗ grok (partial: {gr})"
         elif gr == "ok":
             live_line += f"✗ claude ({cl})  ✓ grok"
-        elif cl == "authenticated_no_data" or gr == "authenticated_no_data" or cl == "rate_data_only" or gr == "rate_data_only":
-            detail = f"authenticated to sites, but no usage numbers extracted yet (grok={gr} claude={cl})"
+        elif (
+            cl == "authenticated_no_data"
+            or gr == "authenticated_no_data"
+            or cl == "rate_data_only"
+            or gr == "rate_data_only"
+        ):
+            detail = (
+                f"authenticated to sites, but no usage numbers extracted yet "
+                f"(grok={gr} claude={cl})"
+            )
             if gr == "rate_data_only" or cl == "rate_data_only":
                 qrem = st.get("grok_query_remaining") or st.get("claude_query_remaining")
                 qtot = st.get("grok_query_total") or st.get("claude_query_total")
                 qw = st.get("grok_query_window_secs") or st.get("claude_query_window_secs")
-                qinfo = f"queries {qrem}/{qtot}" + (f" per {qw}s" if qw else "") if qrem is not None else ""
-                detail = f"live rate limit data only ({qinfo}), no build/weekly usage % (grok={gr} claude={cl})"
+                qinfo = (
+                    f"queries {qrem}/{qtot}" + (f" per {qw}s" if qw else "")
+                    if qrem is not None
+                    else ""
+                )
+                detail = (
+                    f"live rate limit data only ({qinfo}), no build/weekly "
+                    f"usage % (grok={gr} claude={cl})"
+                )
             live_line += f"⚠ {detail}"
             live_line += " (TOKEN_ORACLE_LIVE_DEBUG=1 + rerun to dump raw page text)"
         elif cl == "checking" or gr == "checking":
@@ -289,13 +351,17 @@ def render_frame(forecasts, now, color=None, prev_forecasts=None, live_status=No
     # Side-by-side only when both profiles have matching # of windows (avoids ragged boxes).
     # Otherwise stack cleanly (reliable, titles never collide).
     if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
-        left = _render_profile_block(pnames[0], groups[pnames[0]], now, enabled, st, cells, width=60)
-        right = _render_profile_block(pnames[1], groups[pnames[1]], now, enabled, st, cells, width=60)
+        left = _render_profile_block(
+            pnames[0], groups[pnames[0]], now, enabled, st, cells, width=60
+        )
+        right = _render_profile_block(
+            pnames[1], groups[pnames[1]], now, enabled, st, cells, width=60
+        )
         maxl = max(len(left), len(right))
         left += [" " * 60] * (maxl - len(left))
         right += [" " * 60] * (maxl - len(right))
-        for l, r in zip(left, right):
-            lines.append(l + "   " + r)
+        for left_line, right_line in zip(left, right, strict=False):
+            lines.append(left_line + "   " + right_line)
     else:
         for pn in sorted(pnames):
             blk = _render_profile_block(pn, groups[pn], now, enabled, st, cells, width=66)
@@ -330,7 +396,9 @@ def run(cfg):
     last_live_t = 0
     last_live_st = None
     last_live_cells = None
-    LIVE_STATUS_INTERVAL = 8  # seconds; live probes are expensive (browser), don't do every 1.2s tick
+    LIVE_STATUS_INTERVAL = (
+        8  # seconds; live probes are expensive (browser), don't do every 1.2s tick
+    )
 
     # Immediate feedback so the user knows the command is working during slow
     # bootstrap + first browser launch (which can easily take 10-30s every time).
@@ -349,7 +417,7 @@ def run(cfg):
         "claude": "checking",
         "last_attempt": None,
         "delegated": False,
-        "message": "starting browser + loading live data..."
+        "message": "starting browser + loading live data...",
     }
 
     try:
@@ -359,26 +427,24 @@ def run(cfg):
 
             # Move silent probe env before run_forecast (belt-and-braces now that engine is pure).
             # The fetchers inside probe still print progress unless silenced.
-            prev_silent = os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE')
-            os.environ['TOKEN_ORACLE_SILENT_LIVE_PROBE'] = '1'
+            prev_silent = os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE")
+            os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = "1"
             try:
                 curr = run_forecast(t, cfg)
             finally:
                 if prev_silent is None:
-                    os.environ.pop('TOKEN_ORACLE_SILENT_LIVE_PROBE', None)
+                    os.environ.pop("TOKEN_ORACLE_SILENT_LIVE_PROBE", None)
                 else:
-                    os.environ['TOKEN_ORACLE_SILENT_LIVE_PROBE'] = prev_silent
+                    os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = prev_silent
 
             st_for_this_frame = last_live_st or (placeholder_st if first_frame else None)
 
             # Throttle expensive live probes after the first frame.
-            do_probe = (first_frame or
-                        last_live_st is None or
-                        t - last_live_t > LIVE_STATUS_INTERVAL)
+            do_probe = first_frame or last_live_st is None or t - last_live_t > LIVE_STATUS_INTERVAL
             if do_probe:
                 # Silence during the actual legacy fetches (they may still log inside web).
-                prev_silent2 = os.environ.get('TOKEN_ORACLE_SILENT_LIVE_PROBE')
-                os.environ['TOKEN_ORACLE_SILENT_LIVE_PROBE'] = '1'
+                prev_silent2 = os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE")
+                os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = "1"
                 try:
                     g_raw = lw.fetch_grok_live_usage(headless=True)
                     c_raw = lw.fetch_claude_live_usage(headless=True)
@@ -392,7 +458,8 @@ def run(cfg):
                         "claude": c_pl.state,
                         "last_attempt": nowt,
                         "last_fetch": nowt,
-                        "delegated": bool(getattr(lw, "_BLESSED_PYTHON", None)) and not bool(getattr(lw, "PLAYWRIGHT_AVAILABLE", False)),
+                        "delegated": bool(getattr(lw, "_BLESSED_PYTHON", None))
+                        and not bool(getattr(lw, "PLAYWRIGHT_AVAILABLE", False)),
                         "message": (g_pl.note or c_pl.note or "")[:120],
                     }
                     snap_dict = {
@@ -405,19 +472,27 @@ def run(cfg):
                     }
                     last_live_cells = overlay_cells(curr, snap_dict, nowt)
                 except Exception:
-                    last_live_st = {"grok": "error", "claude": "error", "message": "status check failed"}
+                    last_live_st = {
+                        "grok": "error",
+                        "claude": "error",
+                        "message": "status check failed",
+                    }
                     last_live_cells = last_live_cells or {}
                 finally:
                     if prev_silent2 is None:
-                        os.environ.pop('TOKEN_ORACLE_SILENT_LIVE_PROBE', None)
+                        os.environ.pop("TOKEN_ORACLE_SILENT_LIVE_PROBE", None)
                     else:
-                        os.environ['TOKEN_ORACLE_SILENT_LIVE_PROBE'] = prev_silent2
+                        os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = prev_silent2
                 last_live_t = t
                 first_frame = False
 
-            frame = render_frame(curr, t, prev_forecasts=last_fs,
-                                 live_status=last_live_st or st_for_this_frame,
-                                 cells=last_live_cells)
+            frame = render_frame(
+                curr,
+                t,
+                prev_forecasts=last_fs,
+                live_status=last_live_st or st_for_this_frame,
+                cells=last_live_cells,
+            )
             footer = c.dim("(ctrl-c to quit)  •  " + time.strftime("%H:%M:%S"), c.color_enabled())
             # Robust redraw: full clear, then draw line-by-line with explicit clear-to-EOL.
             print("\033[2J\033[H", end="")

@@ -5,19 +5,17 @@ overlay_cells never fabricates a number; it withholds unless CONF_HIGH + fresh.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 from .contract import (
     CONF_HIGH,
-    METRIC_WEEKLY_PCT,
-    METRIC_MODEL_WEEKLY_PCT,
     METRIC_FIVE_HOUR_PCT,
     METRIC_FIVE_HOUR_STATE,
+    METRIC_MODEL_WEEKLY_PCT,
     METRIC_RATE_WINDOW,
+    METRIC_WEEKLY_PCT,
     STATE_STALE,
     STATE_UNAVAILABLE,
 )
-
 
 FRESH_TTL_SECS = 180.0
 
@@ -30,8 +28,9 @@ class LiveCell:
     state reflects provider state or STATE_STALE.
     state_value carries e.g. "starts_on_first_message" for special 5h handling.
     """
-    pct: float | None       # applied live percentage, or None
-    state: str              # provider STATE_* (STATE_STALE if outdated)
+
+    pct: float | None  # applied live percentage, or None
+    state: str  # provider STATE_* (STATE_STALE if outdated)
     age_secs: float | None
     evidence: str = ""
     extractor: str = ""
@@ -56,8 +55,9 @@ def _wkey(name: str) -> str | None:
     return None
 
 
-def overlay_cells(forecasts, snapshot: dict | None, now: float,
-                  ttl: float = FRESH_TTL_SECS) -> dict[tuple[str, str], LiveCell]:
+def overlay_cells(
+    forecasts, snapshot: dict | None, now: float, ttl: float = FRESH_TTL_SECS
+) -> dict[tuple[str, str], LiveCell]:
     """Build mapping (profile_canon, wkey) -> LiveCell for the given forecasts.
 
     Only high-conf fresh usage readings produce a non-None pct.
@@ -71,11 +71,9 @@ def overlay_cells(forecasts, snapshot: dict | None, now: float,
     for p_raw, pdata in provs.items():
         p_c = _canon(p_raw)
         pfetched = pdata.get("fetched_at")
-        page = None if pfetched is None else max(0.0, now - float(pfetched))
         pstate = pdata.get("state") or STATE_UNAVAILABLE
-        stale_p = (page is not None and page > ttl)
 
-        for r in (pdata.get("readings") or []):
+        for r in pdata.get("readings") or []:
             metric = r.get("metric")
             conf = r.get("confidence")
             val = r.get("value")
@@ -83,7 +81,7 @@ def overlay_cells(forecasts, snapshot: dict | None, now: float,
             ex = str(r.get("extractor", ""))
             rfetched = r.get("fetched_at", pfetched)
             rage = None if rfetched is None else max(0.0, now - float(rfetched))
-            rstale = (rage is not None and rage > ttl)
+            rstale = rage is not None and rage > ttl
 
             cstate = STATE_STALE if rstale else pstate
             apply = (conf == CONF_HIGH) and (not rstale)
@@ -135,7 +133,7 @@ def rate_info(snapshot: dict | None) -> dict:
         return {}
     out = {}
     for pname, pdata in (snapshot.get("providers") or {}).items():
-        for r in (pdata.get("readings") or []):
+        for r in pdata.get("readings") or []:
             if r.get("metric") == METRIC_RATE_WINDOW:
                 out[pname] = {
                     "used_pct": r.get("value"),
