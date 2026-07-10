@@ -63,6 +63,13 @@ def provider_live_from_legacy(provider: str, raw: dict | None, now: float) -> Pr
     if prov not in ("grok", "claude"):
         prov = "claude" if "claude" in prov else "grok"
 
+    # grok now emits ProviderLive natively (plan 031); passthrough so callers
+    # (including dashboard via legacy adapter) see the evidence-bound readings.
+    if isinstance(raw, ProviderLive):
+        if prov == "grok":
+            return raw
+        # fallthrough only for non-grok (claude still uses dict until 032)
+
     readings: list[LiveReading] = []
     state = STATE_NEEDS_LOGIN
     note = (raw or {}).get("scrape_note") or (raw or {}).get("final_url") or ""
@@ -83,7 +90,8 @@ def provider_live_from_legacy(provider: str, raw: dict | None, now: float) -> Pr
     auth = bool(raw.get("authenticated"))
     has_usage = False
 
-    # Grok weekly (build or overall)
+    # Grok weekly (build or overall) — only reached for dict inputs (native pl
+    # already returned above). Legacy grok dicts remain LOW.
     if prov == "grok":
         pct = None
         if raw.get("build_pct") is not None:
@@ -165,8 +173,8 @@ def provider_live_from_legacy(provider: str, raw: dict | None, now: float) -> Pr
         qrem = raw.get("query_remaining")
         qtot = raw.get("query_total")
         try:
-            qrem = float(qrem)
-            qtot = float(qtot)
+            qrem = float(qrem) if qrem is not None else 0.0
+            qtot = float(qtot) if qtot is not None else 0.0
             if qtot > 0:
                 used_pct = (qtot - qrem) / qtot * 100.0
                 readings.append(
