@@ -91,7 +91,14 @@ Dependency: **`xorg-server-xvfb` must be installed** for headed probing without
 a real display (operator installed it 2026-07-10; it's the portability answer
 for servers/SSH and stops browser windows popping up every 60s in the dash).
 Round order: **035 → 036** (sequential; 036 makes headed the persistent default
-and needs 035's working headed path + honest states first).
+and needs 035's working headed path + honest states first). **Plan 037** was
+added mid-round after the operator surfaced the real claude usage page (headed
+capture, now that 035 works): claude.ai renders each meter as a
+`[aria-valuenow]` bar and the collector was climbing both weekly bars (All
+models 59% + **Fable 99%**) into one merged "Weekly limits" card, so Fable was
+dropped. 037 fixes the collector to emit one atomic row per bar; it touches
+`live/web.py`+`claude_extract.py` (disjoint from 036's `config.py`+`cli/main.py`,
+so it can run in parallel).
 
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
@@ -137,7 +144,8 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 034 | Dash — fixed-region scene renderer, honest provenance | P1 | L | 030, 033 (coordinates with 018) | DONE — executed 2026-07-10 on advisor/034-dash-fixed-region-scene @4208b1c (final). 1 commit/step (6 total). Baseline 189p → 194p. New scene.py + tests/test_scene.py (4 tests incl height-invariance) + app.py rewrite. Gates: pytest 0 fail (194); ruff/format/mypy clean on authored/rewritten (pre-existing errors only in untouched core/config.py: module_from_spec, dict/update); grep -n 2J only resize path in scene.py; height invariance + 3-line + provenance wording hold. Manual `oracle dash`: NOT RUN (no tty / isatty=False in executor env; could not be performed headlessly) — height-invariance tests + Painter smoke prove fixed layout/no jumps/alt restore. See PROGRESS.md. |
 
 | 035 | Headed display lifecycle — shared virtual display, never lie when no display | P1 | M | — | DONE — executed 2026-07-10 by grok-xhigh on advisor/035 (7 commits), merged to main at `f337ca2`. Gates re-run by advisor: 201 passed (+6 tests), ruff/format/mypy clean on the 4 in-scope files, all done-criteria greps pass. **Behavioral proof**: headed `--provider all` → grok `rate_data_only` + **claude `ok` (3 readings) after grok** (the RC-A scenario that used to fail), stdout valid JSON (RC-C). Executor correctly used direct `STATE_UNAVAILABLE` where `build_provider_live` would have lied `needs_login`. |
-| 036 | `oracle live on/off/status` — persistent real-data toggle + Xvfb guidance | P1 | M | 035 | TODO (env var → first-class config; dash inherits headed via default config) |
+| 036 | `oracle live on/off/status` — persistent real-data toggle + Xvfb guidance | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/036 (7 commits), merged to main at `3611055`. Gates re-run by advisor: 208 passed (+7), ruff/format/mypy clean on its files. **Behavioral**: `live status`→OFF + display/Xvfb lines + last states; `live on`→writes `{"live":{"headed":true}}`, `headed_enabled()` True, shows "Run oracle dash" (Xvfb present, no warning); `live off`→False. `app.py` untouched (Step 4 correctly concluded dash inherits headed via the default config the spawned live-probe loads). |
+| 037 | Claude Fable weekly row separated from All-models (high-conf `model_weekly_pct`) | P1 | M | 035 | TODO — captured live: 4 aria bars (session 23 / All-models 59 / **Fable 99** / credits 0); collector climbs to merged card so Fable is lost; fix = maximal-single-% ancestor + defensive splitter. Disjoint files from 036. |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
