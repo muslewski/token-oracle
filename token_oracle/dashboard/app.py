@@ -23,6 +23,8 @@ from ..live.contract import (
 from ..live.overlay import overlay_cells
 from ..live.store import load_snapshot
 
+from .scene import Region, Scene
+
 BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
 
 
@@ -47,6 +49,41 @@ def _fmt_reset_abs(reset_in, now):
     return fmt_reset(reset_in)
 
 
+# Fixed-height layout (plan 034): heights depend ONLY on config shape (#windows per profile),
+# never on idle/active state or presence of live data. Every window row is exactly 3 lines.
+HEADER_H = 2
+ALERT_H = 1
+ACTIVITY_H = 3
+FOOTER_H = 1
+
+
+def _panel_block_height(n_windows: int) -> int:
+    """Top + bottom + exactly 3 lines per window (head/meta/provenance)."""
+    n = max(1, int(n_windows or 1))
+    return 2 + 3 * n
+
+
+def panel_height(groups: dict) -> int:
+    """Compute the panels region height for the current groups shape.
+
+    Side-by-side when exactly two profiles with equal window counts: use the
+    block height of one (shorter is padded in render). Stacked otherwise.
+    The value is independent of per-frame data content.
+    """
+    if not groups:
+        return _panel_block_height(1)  # (no data) padded block
+    pnames = list(groups.keys())
+    if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
+        n = len(groups[pnames[0]])
+        return _panel_block_height(n)
+    total = 0
+    for pn, fs in groups.items():
+        n = len(fs) or 1
+        total += _panel_block_height(n)
+        total += 1  # inter-block gap line
+    return total
+
+
 def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, width=66):
     """Render a nice boxed panel. Prioritize: BIG BOLD % + progress bar + 'resets in Xm'.
     Used numbers and source labels are secondary (dim). Clean, no duplicate titles."""
@@ -58,7 +95,11 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
         title += "  Max20x + cloud"
     lines = [c.violet(c.box_top(title, width, enabled), enabled)]
     if not forecasts:
+        # (no data) block is padded to 3 lines (head + blank meta + blank prov) to keep
+        # panel height identical to a 1-window profile regardless of data.
         lines.append(c.box_line(c.dim("(no data)", enabled), width, enabled))
+        lines.append(c.box_line(c.dim("", enabled), width, enabled))
+        lines.append(c.box_line(c.dim("", enabled), width, enabled))
         lines.append(c.box_bot(width, enabled))
         return lines
 
@@ -105,11 +146,16 @@ def _render_profile_block(pname, forecasts, now, enabled, st=None, cells=None, w
                         enabled,
                     )
                 )
+                # pad to exactly 3 lines per window for fixed layout (step 2)
+                lines.append(c.box_line(c.dim("", enabled), width, enabled))
             else:
                 line = (
                     f"{c.M_BULLET} {wname:<6} idle  resets {_fmt_reset_abs(f.reset_in_secs, now)}"
                 )
                 lines.append(c.box_line(c.dim(line, enabled), width, enabled))
+                # pad to exactly 3 lines per window for fixed layout (step 2)
+                lines.append(c.box_line(c.dim("", enabled), width, enabled))
+                lines.append(c.box_line(c.dim("", enabled), width, enabled))
             continue
         # Derive primary display pct + provenance ONLY from cell (plan 030 contract).
         # Never recompute used from a live pct here.
