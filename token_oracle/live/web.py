@@ -16,6 +16,7 @@ The scraper reuses a persistent profile dir so one login lasts.
 For first-time login, you can temporarily run with headless=False.
 """
 
+import contextlib
 import json
 import os
 import shutil
@@ -204,6 +205,60 @@ def _maybe_start_virtual_display():
         except Exception:
             pass
     return None
+
+
+@contextlib.contextmanager
+def virtual_display(progress=None):
+    """Ensure a usable display for a headed browser for the duration of the
+    `with` block. Yields True if a display is usable (real display already
+    present, or an Xvfb we started), False if none is available.
+
+    Restores os.environ['DISPLAY'] to its prior value on exit (RC-A): if we
+    set it, we unset/restore it so a later consumer never inherits a dead
+    display. Progress goes to the callback/stderr, never stdout (RC-C).
+    """
+    if _has_graphical_display():
+        yield True
+        return
+    if not shutil.which("Xvfb"):
+        yield False
+        return
+    prev = os.environ.get("DISPLAY")          # may be None
+    proc = None
+    started_disp = None
+    try:
+        for disp_num in range(99, 150):
+            disp = f":{disp_num}"
+            try:
+                p = subprocess.Popen(
+                    ["Xvfb", disp, "-screen", "0", "1280x1024x24",
+                     "-ac", "-nolisten", "tcp"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                )
+                time.sleep(0.3)
+                if p.poll() is None:
+                    proc = p
+                    started_disp = disp
+                    os.environ["DISPLAY"] = disp
+                    _emit(progress, "   • started virtual display (Xvfb) for browser")
+                    break
+                p.terminate()
+            except Exception:
+                pass
+        yield proc is not None
+    finally:
+        if proc is not None:
+            try:
+                proc.terminate()
+            except Exception:
+                pass
+        # RC-A: restore DISPLAY to its prior value (unset if it was unset),
+        # but only if we're the one who set it.
+        if started_disp is not None and os.environ.get("DISPLAY") == started_disp:
+            if prev is None:
+                os.environ.pop("DISPLAY", None)
+            else:
+                os.environ["DISPLAY"] = prev
 
 
 def _get_profile_dir(name: str) -> str:
