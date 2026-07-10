@@ -179,3 +179,51 @@ def test_unknown_json_yields_nothing():
     now = time.time()
     rs = readings_from_network_json("u", {"version": "1.2.3", "count": 41}, now)
     assert rs == []
+
+
+# --- regression tests for plan 031 strict allowlist (D4) ---
+
+
+def test_usage_with_unlisted_numeric_child_yields_nothing():
+    """{"usage": {"cpuPercent": 13}} must emit [] (no any-numeric under parent)."""
+    now = time.time()
+    rs = readings_from_network_json("https://grok.com", {"usage": {"cpuPercent": 13}}, now)
+    assert rs == []
+
+
+def test_bare_used_alone_yields_nothing():
+    """{"used": 45} alone -> [] (no bare scalars)."""
+    now = time.time()
+    rs = readings_from_network_json("u", {"used": 45}, now)
+    assert rs == []
+
+
+def test_bare_limit_alone_yields_nothing():
+    """{"limit": 100} alone -> [] (no bare scalars)."""
+    now = time.time()
+    rs = readings_from_network_json("u", {"limit": 100}, now)
+    assert rs == []
+
+
+def test_used_limit_pair_at_top_emits_one_weekly_45_high():
+    """{"used": 45, "limit": 100} -> exactly one weekly reading, value 45.0, CONF_HIGH."""
+    now = time.time()
+    rs = readings_from_network_json("https://example", {"used": 45, "limit": 100}, now)
+    assert len(rs) == 1
+    r = rs[0]
+    assert r.metric == METRIC_WEEKLY_PCT
+    assert r.value == 45.0
+    assert r.confidence == CONF_HIGH
+    assert "used=45" in r.evidence
+    assert "limit=100" in r.evidence
+    assert "grok.network_json.usage" in r.extractor
+
+
+def test_exact_key_one_level_deep_still_works():
+    """{"stats": {"weeklyUsagePercent": 10}} -> one weekly 10.0 (exact one-deep allowed)."""
+    now = time.time()
+    rs = readings_from_network_json("u", {"stats": {"weeklyUsagePercent": 10}}, now)
+    weeklies = [r for r in rs if r.metric == METRIC_WEEKLY_PCT]
+    assert len(weeklies) == 1
+    assert weeklies[0].value == 10.0
+    assert weeklies[0].confidence == CONF_HIGH
