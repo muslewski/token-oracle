@@ -219,6 +219,15 @@ def _doctor_lines(cfg, config_path, color, now):
                         break
             except Exception:
                 pass
+            # Step 5: compact surface of the persistent real-data toggle (one line)
+            try:
+                if cfg.headed_enabled():
+                    has_d = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+                    has_x = bool(__import__("shutil").which("Xvfb"))
+                    suffix = " [real data: ON]" if (has_d or has_x) else " [real data: ON (Xvfb missing)]"
+                    live_msg += suffix
+            except Exception:
+                pass
             out.append(colors.dim(live_msg, color))
     except Exception:
         out.append(colors.dim("  live     — status check failed", color))
