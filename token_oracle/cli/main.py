@@ -530,3 +530,7 @@ def _live_setup(cfg, args):
         print("Run `oracle live-setup` again to retry the ones that failed.")
         print("(It will automatically skip providers that are already logged in.)")
     return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
