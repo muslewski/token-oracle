@@ -92,12 +92,41 @@ def _first_pct_in_text(text: str) -> float | None:
     return None
 
 
+_METER_RE = re.compile(
+    r"(?i)(all\s*models|fable|opus|sonnet|haiku|current\s*session)"
+    r"(?P<body>.*?)(?P<pct>\d{1,3}(?:\.\d)?)\s*%\s*used"
+)
+
+
+def split_multi_meter_rows(rows: list[dict]) -> list[dict]:
+    """If a row's text contains >=2 'N% used' meters, split it into one atomic
+    row per meter (label = the meter name, text = that meter's slice). Rows with
+    0 or 1 meters pass through unchanged. Atomic rows keep their aria valuenow;
+    split rows drop it (valuenow=None) so the % comes from the meter's own text
+    (medium confidence) — better a medium Fable reading than a lost one."""
+    out: list[dict] = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        text = str(row.get("text") or "")
+        matches = list(_METER_RE.finditer(text))
+        if len(matches) <= 1:
+            out.append(row)
+            continue
+        for m in matches:
+            label = re.sub(r"\s+", " ", m.group(1)).strip()
+            seg = m.group(0).strip()
+            out.append({"valuenow": None, "valuemax": None, "label": label, "text": seg})
+    return out
+
+
 def readings_from_rows(rows: list[dict], now: float) -> list[LiveReading]:
     """Turn collected row dicts into LiveReadings. Row-scoped only.
 
     Row shape: {"valuenow": str|None, "valuemax": str|None, "label": str, "text": str}
     Classification prefers label, falls back to text. Pct from aria preferred.
     """
+    rows = split_multi_meter_rows(rows)
     readings: list[LiveReading] = []
     for row in rows or []:
         if not isinstance(row, dict):
