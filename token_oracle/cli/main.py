@@ -150,117 +150,56 @@ def _doctor_lines(cfg, config_path, color, now):
     except Exception:
         pass
 
-    # Live web status (very visible so you know if it worked / if it tried)
+    # Live web status — now snapshot-derived only (instant via get_live_status; no probe, no browser, no text leak)
     try:
         from token_oracle.live import web as lw
+        from ..live.store import load_snapshot
 
-        print(
-            "   → starting browser + loading live pages (step-by-step progress will appear below)..."
-        )
         st = lw.get_live_status()
-        extra = ""
-        ts = st.get("last_attempt") or st.get("last_fetch")
+        gr = st.get("grok", "unavailable")
+        cl = st.get("claude", "unavailable")
+        ts = st.get("last_fetch") or st.get("last_attempt")
         if ts:
-            age = int(time.time() - ts)
-            extra = f" (attempted {age}s ago)"
-        if st.get("claude") == "ok" and st.get("grok") == "ok":
-            out.append(
-                colors.dim(
-                    f"  live     — ✓ ACTIVE (pulling real % + reset times from the websites){extra}",
-                    color,
-                )
-            )
-        elif st.get("claude") == "ok" or st.get("grok") == "ok":
-            out.append(
-                colors.dim(
-                    f"  live     — partial (grok={st.get('grok')} claude={st.get('claude')}){extra}",
-                    color,
-                )
-            )
-        elif getattr(lw, "_BLESSED_PYTHON", None) or getattr(lw, "PLAYWRIGHT_AVAILABLE", False):
-            cl = st.get("claude", "?")
-            gr = st.get("grok", "?")
-            is_native = getattr(lw, "PLAYWRIGHT_AVAILABLE", False) and not st.get("delegated")
-            prefix = "live web" if is_native else "live web (via dedicated venv)"
-            if (
-                cl == "authenticated_no_data"
-                or gr == "authenticated_no_data"
-                or cl == "rate_data_only"
-                or gr == "rate_data_only"
-            ):
-                msg = "authenticated but no usage numbers parsed"
-                if gr == "rate_data_only" or cl == "rate_data_only":
-                    msg = "live rate limit data (queries) but no build/weekly usage % parsed"
-                out.append(
-                    colors.dim(f"  {prefix}     — {msg} (grok={gr} claude={cl}){extra}", color)
-                )
-                out.append(
-                    colors.dim(
-                        "            → scraper needs work (or re-run live-setup after fresh login)",
-                        color,
-                    )
-                )
-                out.append(
-                    colors.dim(
-                        "            → tip: TOKEN_ORACLE_LIVE_DEBUG=1 oracle doctor ; cat /tmp/token-oracle-*-usage.txt",
-                        color,
-                    )
-                )
-                # Try one raw fetch to surface scrape diagnostics (len, pcts_found, note) for immediate grasp
-                try:
-                    from token_oracle.live import web as lw
-
-                    raw = None
-                    if gr in ("authenticated_no_data", "rate_data_only"):
-                        raw = lw.fetch_grok_live_usage(headless=True)
-                    elif cl in ("authenticated_no_data", "rate_data_only"):
-                        raw = lw.fetch_claude_live_usage(headless=True)
-                    if raw:
-                        # Support both legacy dict (pre-031/032) and native ProviderLive
-                        if hasattr(raw, "note"):
-                            note = raw.note or ""
-                            fu = raw.note  # note often contains landed url
-                            extra_info = [f"state={raw.state}"]
-                            if note:
-                                extra_info.append(str(note)[:70])
-                            for r in (raw.readings or [])[:3]:
-                                extra_info.append(f"{r.metric}={r.value}")
-                        else:
-                            note = raw.get("scrape_note") if isinstance(raw, dict) else ""
-                            fu = raw.get("final_url") if isinstance(raw, dict) else ""
-                            pt = raw.get("page_title") if isinstance(raw, dict) else ""
-                            extra_info = []
-                            if note:
-                                extra_info.append(str(note)[:70])
-                            if fu:
-                                extra_info.append("url=" + str(fu)[:70])
-                            if pt:
-                                extra_info.append("title=" + str(pt)[:50])
-                            if isinstance(raw, dict) and raw.get("query_remaining") is not None:
-                                qrem = raw.get("query_remaining")
-                                qtot = raw.get("query_total")
-                                qw = raw.get("query_window_secs")
-                                extra_info.append(
-                                    f"queries {qrem}/{qtot}" + (f" (window {qw}s)" if qw else "")
-                                )
-                        if extra_info:
-                            out.append(
-                                colors.dim("            raw: " + " | ".join(extra_info), color)
-                            )
-                except Exception:
-                    pass
+            secs = int(time.time() - ts)
+            if secs < 120:
+                age_str = f"{secs}s ago"
             else:
-                out.append(
-                    colors.dim(f"  {prefix}     — configured (grok={gr} claude={cl}){extra}", color)
-                )
-                out.append(
-                    colors.dim(
-                        "            → run `oracle live-setup` to authenticate (or fix scraper)",
-                        color,
-                    )
-                )
+                age_str = f"{secs // 60}m ago"
         else:
-            out.append(colors.dim("  live     — not configured (run `oracle live-setup`)", color))
+            age_str = ""
+
+        def _fmt_one(pn, pst):
+            if pst == "ok":
+                snap = load_snapshot() or {}
+                pdat = (snap.get("providers") or {}).get(pn, {})
+                for r in (pdat.get("readings") or []):
+                    m = r.get("metric")
+                    if m in ("weekly_pct", "five_hour_pct", "model_weekly_pct"):
+                        val = r.get("value")
+                        extr = r.get("extractor", "")
+                        if isinstance(val, (int, float)):
+                            return f"{pn}=ok ({m} {val:.1f}% · {extr}, {age_str})"
+                return f"{pn}=ok ({age_str})"
+            elif pst == "stale":
+                last = st.get(f"{pn}_last_state", "")
+                return f"{pn}=stale (was {last})" if last else f"{pn}=stale"
+            else:
+                return f"{pn}={pst}"
+
+        if gr == "stale" or cl == "stale":
+            out.append(
+                colors.dim(f"  live     — snapshot is {age_str} old — run oracle live-probe", color)
+            )
+        elif gr == "unavailable" and cl == "unavailable":
+            out.append(
+                colors.dim(
+                    "  live     — not probed yet (run oracle live-probe; oracle live-setup first if never logged in)",
+                    color,
+                )
+            )
+        else:
+            parts = [_fmt_one("grok", gr), _fmt_one("claude", cl)]
+            out.append(colors.dim("  live     — " + " ".join(parts), color))
     except Exception:
         out.append(colors.dim("  live     — status check failed", color))
     return out, bad
