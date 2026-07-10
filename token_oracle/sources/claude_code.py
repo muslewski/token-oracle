@@ -85,7 +85,12 @@ class ClaudeCodeSource:
             # Guarded so it has no effect under the tiny synthetic 'now' values used in tests.
             live_window = 300  # seconds
             is_live = (now > 1_000_000_000) and (st.st_mtime >= now - live_window)
-            if ent and ent.get("mtime") == st.st_mtime and ent.get("size") == st.st_size and not is_live:
+            if (
+                ent
+                and ent.get("mtime") == st.st_mtime
+                and ent.get("size") == st.st_size
+                and not is_live
+            ):
                 continue
             evs = [list(e) for e in iter_usage_events(p) if e[0] >= cutoff]
             files[p] = {"mtime": st.st_mtime, "size": st.st_size, "events": evs}

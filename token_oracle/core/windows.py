@@ -58,7 +58,7 @@ def compute_window(events, now, window, profile=None):
     If window.model is set, only events whose model (case-insens) contains it contribute."""
     cap = window.cap
     P = window.period_secs
-    model_f = (getattr(window, "model", None) or None)
+    model_f = getattr(window, "model", None) or None
     model_f = model_f.lower() if model_f else None
 
     def matches_model(e):

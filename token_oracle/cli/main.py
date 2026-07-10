@@ -47,7 +47,7 @@ def _doctor_lines(cfg, config_path, color, now):
         total_evs = 0
         last_age = None
         if multi:
-            for pname, pdef in cfg.profiles.items():
+            for _pname, pdef in cfg.profiles.items():
                 src_name = pdef.get("source", cfg.source)
                 opts = pdef.get("source_opts", cfg.source_opts or {})
                 try:
@@ -64,7 +64,10 @@ def _doctor_lines(cfg, config_path, color, now):
             age_str = f"last {fmt_dur(last_age)} ago" if last_age is not None else "mixed"
             data_row = (
                 "data",
-                f"profiles={len(cfg.profiles)} · {total_files} files, {total_evs} events, {age_str}",
+                (
+                    f"profiles={len(cfg.profiles)} · {total_files} files, "
+                    f"{total_evs} events, {age_str}"
+                ),
                 total_evs > 0 or True,
             )
         else:
@@ -143,7 +146,8 @@ def _doctor_lines(cfg, config_path, color, now):
         if cl:
             out.append(
                 colors.dim(
-                    "  limits   — real caps + weeklyResetAnchor from ~/.claude/usage-limits.json (exact resets)",
+                    "  limits   — real caps + weeklyResetAnchor from "
+                    "~/.claude/usage-limits.json (exact resets)",
                     color,
                 )
             )
@@ -502,13 +506,15 @@ def _live_setup(cfg, args):
         print("Practical options:")
         print("  • Run `oracle live-setup` on a machine that has a GUI, then copy the profiles:")
         print(
-            "      rsync -av ~/.config/token-oracle/browser-profiles/ user@remote:~/.config/token-oracle/"
+            "      rsync -av ~/.config/token-oracle/browser-profiles/ "
+            "user@remote:~/.config/token-oracle/"
         )
         print("  • Use X11 forwarding: ssh -X user@host  then run `oracle live-setup`")
         print("  • We will try Xvfb (virtual display) automatically if available.")
         print()
         print(
-            "Once the profiles on this machine have valid sessions, `oracle dash` will use real live data."
+            "Once the profiles on this machine have valid sessions, "
+            "`oracle dash` will use real live data."
         )
         return 0
 

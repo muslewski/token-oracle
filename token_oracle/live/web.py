@@ -35,12 +35,9 @@ from .claude_extract import (
 from .contract import (
     STATE_AUTH_NO_DATA,
     STATE_NEEDS_LOGIN,
-    STATE_STALE,
-    STATE_UNAVAILABLE,
     ProviderLive,
     provider_live_from_dict,
 )
-from .store import load_snapshot
 from .extract_common import (
     build_provider_live,
     is_bot_challenge,
@@ -53,6 +50,7 @@ from .grok_extract import (
     readings_from_progressbars,
     readings_from_reset_text,
 )
+from .store import load_snapshot
 
 PLAYWRIGHT_AVAILABLE = False
 sync_playwright = None  # type: ignore
@@ -223,7 +221,7 @@ def fetch_grok_live_usage(
     Progress messages (if any) go to the progress callback or stderr; never stdout.
     """
     # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False + _maybe_start_virtual_display()
-    if not PLAYWRIGHT_AVAILABLE:
+    if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         delegated = _delegate_to_blessed(
             "fetch_grok_live_usage", headless=headless, timeout_ms=timeout_ms
         )
@@ -513,7 +511,7 @@ def fetch_claude_live_usage(
     Uses short TTL cache keyed claude:{headless}.
     """
     # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False + _maybe_start_virtual_display()
-    if not PLAYWRIGHT_AVAILABLE:
+    if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         delegated = _delegate_to_blessed(
             "fetch_claude_live_usage", headless=headless, timeout_ms=timeout_ms
         )
@@ -806,7 +804,7 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
         * Run the setup once on a machine with GUI and rsync the profile dir
         * Use the direct URLs printed below and somehow get cookies into the profile
     """
-    if not PLAYWRIGHT_AVAILABLE:
+    if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         print("Playwright is not installed in the current Python environment.")
         print("Run `oracle live-setup` (it can set things up automatically).")
         return False

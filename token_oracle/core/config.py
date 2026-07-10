@@ -36,11 +36,13 @@ def try_get_claude_five_hour_remaining(now: float | None = None) -> float | None
     """
     if now is None:
         import time as _t
+
         now = _t.time()
 
     # 1. Try server truth (what the website uses)
     try:
         import sys
+
         try:
             import token_forecast.ratelimits as RL
         except Exception:
@@ -61,11 +63,16 @@ def try_get_claude_five_hour_remaining(now: float | None = None) -> float | None
     # 2. Local Claude engine (best local approximation)
     try:
         import importlib.util
+
         path = os.path.expanduser("~/.claude/usage_limits.py")
         if not os.path.exists(path):
             return None
         spec = importlib.util.spec_from_file_location("_claude_ul", path)
+        if spec is None:
+            return None
         mod = importlib.util.module_from_spec(spec)
+        if spec.loader is None:
+            return None
         spec.loader.exec_module(mod)
         cfg = mod.load_limits()
         cap = cfg.get("fiveHourCap")
@@ -101,11 +108,13 @@ def try_get_claude_five_hour_data(now: float | None = None):
     """
     if now is None:
         import time as _t
+
         now = _t.time()
 
     # Server (exact)
     try:
         import sys
+
         try:
             import token_forecast.ratelimits as RL
         except Exception:
@@ -119,18 +128,27 @@ def try_get_claude_five_hour_data(now: float | None = None):
                 rem = d.get("secs_to_reset")
                 sp = d.get("used_percentage")
                 if rem is not None:
-                    return {"reset_in_secs": float(rem), "projected_pct": float(sp) if sp is not None else None, "source": "server"}
+                    return {
+                        "reset_in_secs": float(rem),
+                        "projected_pct": float(sp) if sp is not None else None,
+                        "source": "server",
+                    }
     except Exception:
         pass
 
     # Local
     try:
         import importlib.util
+
         path = os.path.expanduser("~/.claude/usage_limits.py")
         if not os.path.exists(path):
             return None
         spec = importlib.util.spec_from_file_location("_claude_ul", path)
+        if spec is None:
+            return None
         mod = importlib.util.module_from_spec(spec)
+        if spec.loader is None:
+            return None
         spec.loader.exec_module(mod)
         cfg = mod.load_limits()
         cap = cfg.get("fiveHourCap") or 0
@@ -149,28 +167,36 @@ def try_get_claude_five_hour_data(now: float | None = None):
             evs = mod.events_from_cache(c, now)
         blk = mod.compute_block(evs, now, cap, profile=c.get("profile"))
         if blk and not blk.get("idle", False):
-            return {"reset_in_secs": float(blk.get("remaining", 0)), "projected_pct": blk.get("projected_pct"), "source": "local"}
+            return {
+                "reset_in_secs": float(blk.get("remaining", 0)),
+                "projected_pct": blk.get("projected_pct"),
+                "source": "local",
+            }
     except Exception:
         pass
     return None
 
+
 PRESETS = {
     "pro": {
-        "source": "claude_code",  # change to "grok" (or "generic") in your config.json for other harnesses
+        # change to "grok" (or "generic") in your config.json for other harnesses
+        "source": "claude_code",
         "windows": [
             {"name": "5h", "cap": 19000, "period_secs": 18000},
             {"name": "weekly", "cap": 700000, "period_secs": 604800, "anchor": None},
         ],
     },
     "max5": {
-        "source": "claude_code",  # change to "grok" (or "generic") in your config.json for other harnesses
+        # change to "grok" (or "generic") in your config.json for other harnesses
+        "source": "claude_code",
         "windows": [
             {"name": "5h", "cap": 88000, "period_secs": 18000},
             {"name": "weekly", "cap": 3200000, "period_secs": 604800, "anchor": None},
         ],
     },
     "max20": {
-        "source": "claude_code",  # change to "grok" (or "generic") in your config.json for other harnesses
+        # change to "grok" (or "generic") in your config.json for other harnesses
+        "source": "claude_code",
         "windows": [
             {"name": "5h", "cap": 220000, "period_secs": 18000},
             {"name": "weekly", "cap": 8000000, "period_secs": 604800, "anchor": None},
@@ -201,7 +227,9 @@ class Config:
     plan: str = "max20"
     cost_mode: str = "auto"
     pricing: dict = field(default_factory=dict)
-    profiles: dict = field(default_factory=dict)  # multi-sub: {"claude": {"source":.., "windows":..}, "grok": ...}
+    profiles: dict = field(
+        default_factory=dict
+    )  # multi-sub: {"claude": {"source":.., "windows":..}, "grok": ...}
 
 
 def _xdg(env, default_tail):
@@ -277,18 +305,21 @@ def load_config(path: str | None = None) -> "Config":
 
     # raw = max20 defaults ∪ chosen plan preset ∪ explicit file keys (file
     # keys always win — same "last update wins" rule as before plan support).
-    raw: dict[str, Any] = dict(PRESETS["max20"])
-    plan = data.get("plan") if data else None
+    base = PRESETS.get("max20") if isinstance(PRESETS, dict) else None
+    raw: dict[str, Any] = dict(base) if isinstance(base, dict) else {}
+    plan = data.get("plan") if isinstance(data, dict) else None
     if plan is not None:
-        if isinstance(plan, str) and plan in PRESETS:
-            raw.update(PRESETS[plan])
+        pdef = PRESETS.get(plan) if isinstance(PRESETS, dict) else None
+        if isinstance(plan, str) and isinstance(pdef, dict):
+            raw.update(pdef)
         else:
             issues.append(f'config "plan" {plan!r} is unknown — using built-in max20 preset')
             plan = "max20"
     else:
         plan = "max20"
-    preset_windows = raw.get("windows", PRESETS["max20"]["windows"])
-    if data:
+    pwin = PRESETS.get("max20") if isinstance(PRESETS, dict) else None
+    preset_windows = raw.get("windows", pwin.get("windows") if isinstance(pwin, dict) else [])
+    if isinstance(data, dict):
         raw.update(data)
 
     raw_windows = raw.get("windows", [])
@@ -317,12 +348,18 @@ def load_config(path: str | None = None) -> "Config":
             if isinstance(w, dict):
                 ww = dict(w)
                 nm = str(ww.get("name", "")).lower()
-                if five_cap and ("5h" in nm or "5-hour" in nm or nm in ("5h", "session", "current")):
+                if five_cap and (
+                    "5h" in nm or "5-hour" in nm or nm in ("5h", "session", "current")
+                ):
                     ww["cap"] = int(five_cap)
                 if wk_cap and nm in ("weekly", "week", "fable"):
                     ww["cap"] = int(wk_cap)
-                # Prefer server anchor for exact reset time on weekly windows (unless user overrode with explicit anchor)
-                if wk_anchor is not None and nm in ("weekly", "week", "fable") and ww.get("anchor") in (None, "null"):
+                # Prefer server anchor for weekly (unless user overrode with explicit anchor)
+                if (
+                    wk_anchor is not None
+                    and nm in ("weekly", "week", "fable")
+                    and ww.get("anchor") in (None, "null")
+                ):
                     ww["anchor"] = wk_anchor
                 fixed.append(ww)
             else:
@@ -376,11 +413,17 @@ def load_config(path: str | None = None) -> "Config":
                     if isinstance(w, dict):
                         ww = dict(w)
                         nm = str(ww.get("name", "")).lower()
-                        if five_cap and ("5h" in nm or "5-hour" in nm or nm in ("5h", "session", "current")):
+                        if five_cap and (
+                            "5h" in nm or "5-hour" in nm or nm in ("5h", "session", "current")
+                        ):
                             ww["cap"] = int(five_cap)
                         if wk_cap and nm in ("weekly", "week", "fable"):
                             ww["cap"] = int(wk_cap)
-                        if wk_anchor is not None and nm in ("weekly", "week", "fable") and ww.get("anchor") in (None, "null"):
+                        if (
+                            wk_anchor is not None
+                            and nm in ("weekly", "week", "fable")
+                            and ww.get("anchor") in (None, "null")
+                        ):
                             ww["anchor"] = wk_anchor
                         fixed.append(ww)
                     else:
@@ -394,7 +437,7 @@ def load_config(path: str | None = None) -> "Config":
         if isinstance(pdef, dict):
             norm_profiles[str(pname)] = dict(pdef)
         else:
-            issues.append(f'profiles[{pname!r}] ignored (not an object)')
+            issues.append(f"profiles[{pname!r}] ignored (not an object)")
 
     return Config(
         source=raw.get("source", "claude_code"),
