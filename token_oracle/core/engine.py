@@ -6,7 +6,6 @@ Backward compatible: single-source configs behave exactly as before."""
 from . import events as events_mod
 from .cache import AGGREGATE_INTERVAL, load_cache, save_cache
 from .config import load_config, try_get_claude_five_hour_data, try_get_claude_five_hour_remaining
-from ..sources.live_web import fetch_claude_live_usage, fetch_grok_live_usage
 from .contracts import Forecast
 from .profile import HIST_SECS, build_profile
 from .windows import compute_window
@@ -94,52 +93,6 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
                     object.__setattr__(f, "reset_in_secs", claude_rem)
         forecasts.append(f)
 
-    # Live web authoritative override (real Grok.com / claude.ai numbers)
-    # This fixes drift between local logs and what the user sees on the websites.
-    # Only for claude_code / grok sources. If playwright not installed or not logged in, no-op.
-    if source_name == "claude_code":
-        live = fetch_claude_live_usage(headless=True)
-        if live:
-            for f in forecasts:
-                nm = f.window.lower()
-                cap = getattr(f, "cap", 0) or 0
-                if nm in ("5h", "session", "current"):
-                    if live.get("five_hour_state") == "starts_on_first_message":
-                        object.__setattr__(f, "idle", True)
-                        object.__setattr__(f, "projected_pct", 0.0)
-                        object.__setattr__(f, "used", 0)
-                        # keep a full period for reset label
-                        if not getattr(f, "reset_in_secs", None):
-                            object.__setattr__(f, "reset_in_secs", 18000.0)
-                    elif live.get("five_hour_reset_in_secs") is not None:
-                        object.__setattr__(f, "reset_in_secs", live["five_hour_reset_in_secs"])
-                    if live.get("five_hour_pct") is not None:
-                        object.__setattr__(f, "projected_pct", live["five_hour_pct"])
-                        if cap:
-                            object.__setattr__(f, "used", int(round(live["five_hour_pct"] / 100.0 * cap)))
-                if nm == "fable" and live.get("fable_pct") is not None:
-                    pct = live["fable_pct"]
-                    object.__setattr__(f, "projected_pct", pct)
-                    if cap:
-                        object.__setattr__(f, "used", int(round(pct / 100.0 * cap)))
-                elif nm in ("weekly", "week") and live.get("all_pct") is not None:
-                    pct = live["all_pct"]
-                    object.__setattr__(f, "projected_pct", pct)
-                    if cap:
-                        object.__setattr__(f, "used", int(round(pct / 100.0 * cap)))
-    elif source_name == "grok":
-        live = fetch_grok_live_usage(headless=True)
-        if live:
-            for f in forecasts:
-                if f.window.lower() == "weekly":
-                    pct = live.get("build_pct") if live.get("build_pct") is not None else live.get("overall_pct")
-                    if pct is not None:
-                        object.__setattr__(f, "projected_pct", pct)
-                        if getattr(f, "cap", 0):
-                            object.__setattr__(f, "used", int(round(pct / 100.0 * f.cap)))
-                    if live.get("reset_in_secs"):
-                        object.__setattr__(f, "reset_in_secs", live["reset_in_secs"])
-
     return cslice, forecasts
 
 
@@ -204,49 +157,6 @@ def forecast(now, config=None):
                         if claude_rem is not None and claude_rem > 0:
                             object.__setattr__(f, "reset_in_secs", claude_rem)
                 fs.append(f)
-
-            # Live web authoritative override for legacy single-source claude/grok
-            if cfg.source == "claude_code":
-                live = fetch_claude_live_usage(headless=True)
-                if live:
-                    for f in fs:
-                        nm = f.window.lower()
-                        cap = getattr(f, "cap", 0) or 0
-                        if nm in ("5h", "session", "current"):
-                            if live.get("five_hour_state") == "starts_on_first_message":
-                                object.__setattr__(f, "idle", True)
-                                object.__setattr__(f, "projected_pct", 0.0)
-                                object.__setattr__(f, "used", 0)
-                                if not getattr(f, "reset_in_secs", None):
-                                    object.__setattr__(f, "reset_in_secs", 18000.0)
-                            elif live.get("five_hour_reset_in_secs") is not None:
-                                object.__setattr__(f, "reset_in_secs", live["five_hour_reset_in_secs"])
-                            if live.get("five_hour_pct") is not None:
-                                object.__setattr__(f, "projected_pct", live["five_hour_pct"])
-                                if cap:
-                                    object.__setattr__(f, "used", int(round(live["five_hour_pct"] / 100.0 * cap)))
-                        if nm == "fable" and live.get("fable_pct") is not None:
-                            pct = live["fable_pct"]
-                            object.__setattr__(f, "projected_pct", pct)
-                            if cap:
-                                object.__setattr__(f, "used", int(round(pct / 100.0 * cap)))
-                        elif nm in ("weekly", "week") and live.get("all_pct") is not None:
-                            pct = live["all_pct"]
-                            object.__setattr__(f, "projected_pct", pct)
-                            if cap:
-                                object.__setattr__(f, "used", int(round(pct / 100.0 * cap)))
-            elif cfg.source == "grok":
-                live = fetch_grok_live_usage(headless=True)
-                if live:
-                    for f in fs:
-                        if f.window.lower() == "weekly":
-                            pct = live.get("build_pct") if live.get("build_pct") is not None else live.get("overall_pct")
-                            if pct is not None:
-                                object.__setattr__(f, "projected_pct", pct)
-                                if getattr(f, "cap", 0):
-                                    object.__setattr__(f, "used", int(round(pct / 100.0 * f.cap)))
-                            if live.get("reset_in_secs"):
-                                object.__setattr__(f, "reset_in_secs", live["reset_in_secs"])
 
             for f in fs:
                 object.__setattr__(f, "profile", "default")
