@@ -3,10 +3,11 @@ live.json. Progress goes to the callback (stderr by default) so no consumer
 surface can be polluted by browser chatter.
 """
 
+import contextlib
 import os
 import time
 
-from .contract import STATE_ERROR, ProviderLive, provider_live_to_dict
+from .contract import STATE_ERROR, STATE_UNAVAILABLE, ProviderLive, provider_live_to_dict
 from .store import save_snapshot
 from .web import fetch_claude_live_usage, fetch_grok_live_usage
 
@@ -31,48 +32,74 @@ def run_probe(
 
     snap_providers: dict[str, ProviderLive] = {}
 
-    for name in prov_list:
-        if name not in ("grok", "claude"):
-            continue
-        if progress:
-            try:
-                progress(f"   • probing {name} ...")
-            except Exception:
-                pass
-        try:
-            if name == "grok":
-                pl = fetch_grok_live_usage(headless=headless, progress=progress)
-            else:
-                pl = fetch_claude_live_usage(headless=headless, progress=progress)
-
-            if isinstance(pl, ProviderLive):
-                snap_providers[name] = pl
-            else:
-                # None or unexpected (e.g. no playwright) → treat as needs_login honest state
-                snap_providers[name] = ProviderLive(
-                    provider=name,
-                    state="needs_login",
-                    readings=[],
-                    fetched_at=time.time(),
-                    error=None,
-                    note="no playwright data",
-                )
+    from .web import virtual_display          # local import, mirrors existing style
+    display_ok = True
+    cm = virtual_display(progress) if not headless else contextlib.nullcontext(True)
+    with cm as _disp:
+        if not headless:
+            display_ok = bool(_disp)
+        for name in prov_list:
+            if name not in ("grok", "claude"):
+                continue
             if progress:
                 try:
-                    st = snap_providers[name].state if name in snap_providers else "?"
-                    progress(f"   • {name} → {st}")
+                    progress(f"   • probing {name} ...")
                 except Exception:
                     pass
-        except Exception as e:
-            snap_providers[name] = ProviderLive(
-                provider=name,
-                state=STATE_ERROR,
-                readings=[],
-                fetched_at=time.time(),
-                error=str(e)[:200],
-            )
+            try:
+                if not headless and not display_ok:
+                    # RC-D: honest — headed requested but no display/Xvfb available.
+                    # Never lie with needs_login; user must install xorg-server-xvfb.
+                    snap_providers[name] = ProviderLive(
+                        provider=name,
+                        state=STATE_UNAVAILABLE,
+                        readings=[],
+                        fetched_at=time.time(),
+                        error=None,
+                        note="headed mode needs a display or Xvfb (install xorg-server-xvfb)",
+                    )
+                    if progress:
+                        try:
+                            progress(f"   • {name} → {STATE_UNAVAILABLE}")
+                        except Exception:
+                            pass
+                    continue
+                if name == "grok":
+                    pl = fetch_grok_live_usage(headless=headless, progress=progress)
+                else:
+                    pl = fetch_claude_live_usage(headless=headless, progress=progress)
+
+                if isinstance(pl, ProviderLive):
+                    snap_providers[name] = pl
+                else:
+                    # RC-D: None no longer means "needs_login". If we got here
+                    # (headed with a display or in headless), it's an honest unavailable,
+                    # not a login problem. (The fetch preflight or None return.)
+                    snap_providers[name] = ProviderLive(
+                        provider=name,
+                        state=STATE_UNAVAILABLE,
+                        readings=[],
+                        fetched_at=time.time(),
+                        error=None,
+                        note="no data returned",
+                    )
+                if progress:
+                    try:
+                        st = snap_providers[name].state if name in snap_providers else "?"
+                        progress(f"   • {name} → {st}")
+                    except Exception:
+                        pass
+            except Exception as e:
+                snap_providers[name] = ProviderLive(
+                    provider=name,
+                    state=STATE_ERROR,
+                    readings=[],
+                    fetched_at=time.time(),
+                    error=str(e)[:200],
+                )
 
     # Always attempt the atomic write; return the dict regardless of I/O outcome.
+    # (Display is torn down before snapshot write.)
     save_snapshot(snap_providers, path)
 
     snap_dict = {
