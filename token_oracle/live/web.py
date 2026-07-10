@@ -22,6 +22,7 @@ import shutil
 import subprocess
 import sys
 import time
+from collections.abc import Callable
 from typing import Any
 
 from .claude_extract import (
@@ -33,9 +34,12 @@ from .claude_extract import (
 )
 from .contract import (
     STATE_NEEDS_LOGIN,
+    STATE_STALE,
+    STATE_UNAVAILABLE,
     ProviderLive,
     provider_live_from_dict,
 )
+from .store import load_snapshot
 from .extract_common import (
     build_provider_live,
     merge_readings,
@@ -134,19 +138,22 @@ __all__ = [
     "launch_login_session",
 ]
 
-# Very small in-memory TTL cache so the live dash doesn't launch a full browser on every 1s tick.
-_LIVE_CACHE: dict[str, Any] = {}
-_LIVE_TTL = 25  # seconds; refresh ~2x per minute is plenty for usage numbers
+ProgressFn = Callable[[str], None]
 
 
-def _cached_fetch(key: str, fetcher, *a, **k):
-    now = time.time()
-    ent = _LIVE_CACHE.get(key)
-    if ent and now - ent["ts"] < _LIVE_TTL:
-        return ent["val"]
-    val = fetcher(*a, **k)
-    _LIVE_CACHE[key] = {"ts": now, "val": val}
-    return val
+def _emit(progress: ProgressFn | None, msg: str) -> None:
+    """Emit a progress message. If callback provided call it (for probe orchestrator
+    to capture to stderr buffer); otherwise write to stderr so it never pollutes
+    consumer stdout (dash/doctor output, json, etc).
+    """
+    if progress is not None:
+        try:
+            progress(msg)
+        except Exception:
+            # Never let a progress callback break the fetch.
+            pass
+    else:
+        print(msg, file=sys.stderr)
 
 
 def get_browser_profile_dir(provider: str) -> str:
@@ -204,12 +211,12 @@ def _get_profile_dir(name: str) -> str:
     return get_browser_profile_dir(name)
 
 
-def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> ProviderLive | None:
+def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000, progress: ProgressFn | None = None) -> ProviderLive | None:
     """Fetch current Grok usage from grok.com Settings → Usage.
 
     Returns ProviderLive (state + evidence-bound LiveReadings) or None only
     when playwright unavailable and delegation failed.
-    Uses short TTL cache keyed grok:{headless}.
+    Progress messages (if any) go to the progress callback or stderr; never stdout.
     """
     if not PLAYWRIGHT_AVAILABLE:
         delegated = _delegate_to_blessed(
@@ -226,26 +233,11 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
                 return None
         return None
 
-    ck = f"grok:{headless}"
-    now = time.time()
-    ent = _LIVE_CACHE.get(ck)
-    if ent and now - ent["ts"] < _LIVE_TTL:
-        cached = ent["val"]
-        if isinstance(cached, ProviderLive):
-            return cached
-        if isinstance(cached, dict):
-            try:
-                return provider_live_from_dict(cached)
-            except Exception:
-                pass
-        return None
-
     url = "https://grok.com/settings/usage"
     profile_dir = _get_profile_dir("grok")
 
     try:
-        if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-            print("   • launching browser (Chromium) for grok.com ...")
+        _emit(progress, "   • launching browser (Chromium) for grok.com ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
                 profile_dir,
@@ -278,8 +270,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
                 pass
 
             # Warm + deep link. NO blind click navigation loops.
-            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-                print("   • warming main grok.com page...")
+            _emit(progress, "   • warming main grok.com page...")
             try:
                 page.goto("https://grok.com", wait_until="domcontentloaded", timeout=timeout_ms)
                 page.wait_for_load_state("networkidle", timeout=6000)
@@ -287,8 +278,7 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
             except Exception:
                 pass
 
-            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-                print("   • loading grok usage page and waiting for data...")
+            _emit(progress, "   • loading grok usage page and waiting for data...")
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             except Exception:
@@ -332,12 +322,10 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
                     error=None,
                     note="login wall",
                 )
-                _LIVE_CACHE[ck] = {"ts": time.time(), "val": pl}
                 return pl
 
             # Authenticated at this point (passed obvious wall).
-            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-                print("   • collecting usage facts via DOM evaluate...")
+            _emit(progress, "   • collecting usage facts via DOM evaluate...")
 
             # One evaluate for bars + sections (no full body walk, no __NEXT concat here).
             facts: dict[str, Any] = {"bars": [], "sections": []}
@@ -452,15 +440,13 @@ def fetch_grok_live_usage(headless: bool = True, timeout_ms: int = 15000) -> Pro
                         pass
 
             context.close()
-            _LIVE_CACHE[ck] = {"ts": time.time(), "val": pl}
             return pl
 
     except Exception:
-        _LIVE_CACHE[ck] = {"ts": time.time(), "val": None}
         return None
 
 
-def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> ProviderLive | None:
+def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000, progress: ProgressFn | None = None) -> ProviderLive | None:
     """Fetch current Claude usage from claude.ai/settings/usage.
 
     Returns ProviderLive (state + evidence-bound LiveReadings) or None only
@@ -482,26 +468,11 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> P
                 return None
         return None
 
-    ck = f"claude:{headless}"
-    now = time.time()
-    ent = _LIVE_CACHE.get(ck)
-    if ent and now - ent["ts"] < _LIVE_TTL:
-        cached = ent["val"]
-        if isinstance(cached, ProviderLive):
-            return cached
-        if isinstance(cached, dict):
-            try:
-                return provider_live_from_dict(cached)
-            except Exception:
-                pass
-        return None
-
     url = "https://claude.ai/settings/usage"
     profile_dir = _get_profile_dir("claude")
 
     try:
-        if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-            print("   • launching browser (Chromium) for claude.ai ...")
+        _emit(progress, "   • launching browser (Chromium) for claude.ai ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
                 profile_dir,
@@ -529,8 +500,7 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> P
             except Exception:
                 pass
 
-            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-                print("   • loading claude.ai/settings/usage ...")
+            _emit(progress, "   • loading claude.ai/settings/usage ...")
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             except Exception:
@@ -570,12 +540,10 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> P
                     error=None,
                     note="login wall",
                 )
-                _LIVE_CACHE[ck] = {"ts": time.time(), "val": pl}
                 return pl
 
             # Authenticated at this point.
-            if not os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE"):
-                print("   • collecting usage facts via DOM evaluate...")
+            _emit(progress, "   • collecting usage facts via DOM evaluate...")
 
             # ONE evaluate collecting row dicts (progressbar containers + idle session blocks).
             facts: dict[str, Any] = {"rows": []}
@@ -709,11 +677,9 @@ def fetch_claude_live_usage(headless: bool = True, timeout_ms: int = 15000) -> P
                         pass
 
             context.close()
-            _LIVE_CACHE[ck] = {"ts": time.time(), "val": pl}
             return pl
 
     except Exception:
-        _LIVE_CACHE[ck] = {"ts": time.time(), "val": None}
         return None
 
 
@@ -857,111 +823,83 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
                 pass
 
 
-def get_live_status() -> dict:
-    """Rich status for live web.
-    Returns e.g.
-    {
-      "grok": "ok" | "needs_login" | "unavailable" | "error",
-      "claude": "...",
-      "last_fetch": 1699999999.0 or None,
-      "last_attempt": 1699999999.0 or None,
-      "delegated": bool,
-      "message": "short human note"
-    }
-    The last_attempt is *always* populated when we actually probe (even on needs_login
-    or empty results). This makes `oracle dash` clearly show that live web was tried.
+def get_live_status(now: float | None = None) -> dict:
+    """Snapshot-derived status for live web. Never probes.
+
+    Returns dict with keys: grok, claude, last_fetch, last_attempt, message
+    (and optionally delegated=False, and *_last_state when stale).
+    Consumers (doctor, dash, live-setup) read this; the only writer is live-probe.
+
+    - no snapshot → both "unavailable", message mentions "run oracle live-probe"
+    - snapshot older than STALE_AFTER → per-provider "stale", original in *_last_state
+    - fresh → verbatim states from snapshot + last_* times
     """
-    attempt_at = time.time()
-    result = {
+    if now is None:
+        now = time.time()
+    STALE_AFTER = 600  # seconds
+
+    result: dict = {
         "grok": "unavailable",
         "claude": "unavailable",
         "last_fetch": None,
-        "last_attempt": attempt_at,
+        "last_attempt": now,
         "delegated": False,
-        "message": "",
+        "message": "no live snapshot — run oracle live-probe",
     }
-    if not PLAYWRIGHT_AVAILABLE:
-        bp = _blessed_python()
-        if bp:
-            # Delegate the whole status call
-            try:
-                code = """
-import json
-from token_oracle.live.web import get_live_status
-print(json.dumps(get_live_status()))
-"""
-                out = subprocess.check_output(
-                    [bp, "-c", code], text=True, stderr=subprocess.DEVNULL, timeout=60
-                )
-                delegated = json.loads(out)
-                delegated["delegated"] = True
-                delegated["message"] = "using dedicated venv"
-                delegated.setdefault("last_attempt", time.time())
-                return delegated
-            except Exception as e:
-                return {
-                    "grok": "error",
-                    "claude": "error",
-                    "last_fetch": None,
-                    "last_attempt": time.time(),
-                    "delegated": True,
-                    "message": f"delegation failed: {e}",
-                }
-        result["last_attempt"] = attempt_at
+
+    snap = load_snapshot()
+    if not snap or not isinstance(snap, dict):
         return result
 
-    # Current python has playwright
-    fetches = {}
-    last = None
-    data_by_name = {}
-    for name, fetcher in (("grok", fetch_grok_live_usage), ("claude", fetch_claude_live_usage)):
-        try:
-            data = fetcher(headless=True)
-            if data:
-                data_by_name[name] = data
-                if isinstance(data, ProviderLive):
-                    st = data.state
-                    fetches[name] = (
-                        st
-                        if st
-                        in ("ok", "rate_data_only", "authenticated_no_data", "needs_login", "error")
-                        else "authenticated_no_data"
-                    )
-                    if data.fetched_at:
-                        last = max(last or 0, data.fetched_at)
-                else:
-                    fetches[name] = "authenticated_no_data"
+    written_at = float(snap.get("written_at") or 0.0)
+    providers = snap.get("providers") or {}
+    age = now - written_at if written_at else 999999.0
+
+    result["last_fetch"] = written_at if written_at else None
+    result["last_attempt"] = now
+
+    if age > STALE_AFTER:
+        for p in ("grok", "claude"):
+            if p in providers and isinstance(providers[p], dict):
+                orig_state = providers[p].get("state", "unavailable")
+                result[p] = "stale"
+                result[f"{p}_last_state"] = orig_state
             else:
-                fetches[name] = "needs_login"
-        except Exception:
-            fetches[name] = "error"
+                result[p] = "stale"
+        result["message"] = f"snapshot is {int(age)}s old — run oracle live-probe"
+        return result
 
-    result.update(fetches)
-    result["last_fetch"] = last
-    result["last_attempt"] = time.time()
-    result["delegated"] = False
-    result["message"] = "direct"
+    # fresh snapshot: verbatim states
+    for p in ("grok", "claude"):
+        if p in providers and isinstance(providers[p], dict):
+            st = providers[p].get("state", "unavailable")
+            # normalize to known strings if needed
+            result[p] = st if st in (
+                "ok", "rate_data_only", "authenticated_no_data", "needs_login", "error", "stale", "unavailable"
+            ) else "unavailable"
+        else:
+            result[p] = "unavailable"
 
-    # Propagate rate limit info for display in doctor/dash
-    for name in ("grok", "claude"):
-        if name in data_by_name:
-            d = data_by_name[name]
-            if isinstance(d, ProviderLive):
-                for r in d.readings or []:
-                    if r.metric == "rate_window":
-                        result[f"{name}_query_used_pct"] = r.value
-    if all(v == "ok" for v in fetches.values()):
+    # propagate any rate info from the snapshot (for doctor/dash compat)
+    for p in ("grok", "claude"):
+        if p in providers and isinstance(providers[p], dict):
+            for r in (providers[p].get("readings") or []):
+                if isinstance(r, dict) and r.get("metric") == "rate_window":
+                    result[f"{p}_query_used_pct"] = r.get("value")
+
+    if all(result.get(k) == "ok" for k in ("grok", "claude")):
         result["message"] = "live web active"
-    elif any(v == "rate_data_only" for v in fetches.values()):
+    elif any(result.get(k) == "rate_data_only" for k in ("grok", "claude")):
         result["message"] = (
             "live rate limit data available (query window); no usage % parsed from settings"
         )
-    elif any(v == "authenticated_no_data" for v in fetches.values()):
+    elif any(result.get(k) == "authenticated_no_data" for k in ("grok", "claude")):
         result["message"] = "authenticated but scraper found no usage numbers"
-        # if one of the raw results had extra info, keep a short note
-        # (the actual fetch results are what dashboard/doctor primarily use)
-    elif any(v == "needs_login" for v in fetches.values()):
+    elif any(result.get(k) == "needs_login" for k in ("grok", "claude")):
         result["message"] = "run `oracle live-setup` to authenticate"
+    else:
+        result["message"] = "live snapshot"
+
     return result
 
 

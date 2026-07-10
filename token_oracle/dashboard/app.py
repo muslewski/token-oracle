@@ -425,26 +425,13 @@ def run(cfg):
         while True:
             t = time.time()
 
-            # Move silent probe env before run_forecast (belt-and-braces now that engine is pure).
-            # The fetchers inside probe still print progress unless silenced.
-            prev_silent = os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE")
-            os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = "1"
-            try:
-                curr = run_forecast(t, cfg)
-            finally:
-                if prev_silent is None:
-                    os.environ.pop("TOKEN_ORACLE_SILENT_LIVE_PROBE", None)
-                else:
-                    os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = prev_silent
+            curr = run_forecast(t, cfg)
 
             st_for_this_frame = last_live_st or (placeholder_st if first_frame else None)
 
             # Throttle expensive live probes after the first frame.
             do_probe = first_frame or last_live_st is None or t - last_live_t > LIVE_STATUS_INTERVAL
             if do_probe:
-                # Silence during the actual fetches (they may still log inside web).
-                prev_silent2 = os.environ.get("TOKEN_ORACLE_SILENT_LIVE_PROBE")
-                os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = "1"
                 try:
                     g_raw = lw.fetch_grok_live_usage(headless=True)
                     c_raw = lw.fetch_claude_live_usage(headless=True)
@@ -491,11 +478,6 @@ def run(cfg):
                         "message": "status check failed",
                     }
                     last_live_cells = last_live_cells or {}
-                finally:
-                    if prev_silent2 is None:
-                        os.environ.pop("TOKEN_ORACLE_SILENT_LIVE_PROBE", None)
-                    else:
-                        os.environ["TOKEN_ORACLE_SILENT_LIVE_PROBE"] = prev_silent2
                 last_live_t = t
                 first_frame = False
 
