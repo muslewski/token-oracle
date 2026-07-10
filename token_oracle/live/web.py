@@ -36,6 +36,7 @@ from .claude_extract import (
 from .contract import (
     STATE_AUTH_NO_DATA,
     STATE_NEEDS_LOGIN,
+    STATE_UNAVAILABLE,
     ProviderLive,
     provider_live_from_dict,
 )
@@ -295,14 +296,23 @@ def fetch_grok_live_usage(
     if os.environ.get("TOKEN_ORACLE_LIVE_HEADED") == "1":
         headless = False
 
+    # Preflight for headed: if caller wants display but none available (no $DISPLAY, no Xvfb),
+    # return honest unavailable instead of letting launch fail and get mis-mapped to needs_login.
+    if not headless and not _has_graphical_display():
+        return ProviderLive(
+            provider="grok",
+            state=STATE_UNAVAILABLE,
+            readings=[],
+            fetched_at=time.time(),
+            error=None,
+            note="headed mode needs a display or Xvfb (install xorg-server-xvfb)",
+        )
+
     now = time.time()
     url = "https://grok.com/settings/usage"
     profile_dir = _get_profile_dir("grok")
 
-    xvfb_proc = None
     try:
-        if not headless:
-            xvfb_proc = _maybe_start_virtual_display()
         _emit(progress, "   • launching browser (Chromium) for grok.com ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
@@ -548,12 +558,6 @@ def fetch_grok_live_usage(
 
     except Exception:
         return None
-    finally:
-        if xvfb_proc:
-            try:
-                xvfb_proc.terminate()
-            except Exception:
-                pass
 
 
 def fetch_claude_live_usage(
@@ -585,14 +589,23 @@ def fetch_claude_live_usage(
     if os.environ.get("TOKEN_ORACLE_LIVE_HEADED") == "1":
         headless = False
 
+    # Preflight for headed: if caller wants display but none available (no $DISPLAY, no Xvfb),
+    # return honest unavailable instead of letting launch fail and get mis-mapped to needs_login.
+    if not headless and not _has_graphical_display():
+        return ProviderLive(
+            provider="claude",
+            state=STATE_UNAVAILABLE,
+            readings=[],
+            fetched_at=time.time(),
+            error=None,
+            note="headed mode needs a display or Xvfb (install xorg-server-xvfb)",
+        )
+
     now = time.time()
     url = "https://claude.ai/settings/usage"
     profile_dir = _get_profile_dir("claude")
 
-    xvfb_proc = None
     try:
-        if not headless:
-            xvfb_proc = _maybe_start_virtual_display()
         _emit(progress, "   • launching browser (Chromium) for claude.ai ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
@@ -840,12 +853,6 @@ def fetch_claude_live_usage(
 
     except Exception:
         return None
-    finally:
-        if xvfb_proc:
-            try:
-                xvfb_proc.terminate()
-            except Exception:
-                pass
 
 
 def launch_login_session(provider: str = "grok", headless: bool = False) -> bool:
