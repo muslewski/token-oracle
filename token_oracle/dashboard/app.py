@@ -2,7 +2,11 @@
 refresh loop. Enhanced for multi-sub (Claude + Grok side-by-side), rich boxes,
 progress, and RESET alarm animations that people will remember."""
 
+import json
 import os
+import subprocess
+import sys
+import threading
 import time
 
 from ..cli import colors as c
@@ -15,11 +19,9 @@ from ..live.contract import (
     STATE_NEEDS_LOGIN,
     STATE_RATE_DATA_ONLY,
     STATE_STALE,
-    ProviderLive,
-    provider_live_to_dict,
 )
 from ..live.overlay import overlay_cells
-from ..live.store import save_snapshot
+from ..live.store import load_snapshot
 
 BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
 
@@ -391,101 +393,84 @@ def render_frame(forecasts, now, color=None, prev_forecasts=None, live_status=No
 
 
 def run(cfg):
-    """Live refreshing dashboard. Remembers prev state for reset detection + animation."""
+    """Live refreshing dashboard. Remembers prev state for reset detection + animation.
+
+    Probing happens in a daemon background thread via `oracle live-probe --json`
+    (or the blessed venv oracle). This run() only reads the snapshot file and
+    renders — no browser launch, no stdout pollution from progress.
+    """
     last_fs = None
-    last_live_t = 0
-    last_live_st = None
     last_live_cells = None
-    LIVE_STATUS_INTERVAL = (
-        8  # seconds; live probes are expensive (browser), don't do every 1.2s tick
-    )
+    last_live_st = None
+    LIVE_PROBE_INTERVAL = 60  # seconds; probes are 10-30s, avoid overlap
 
-    # Immediate feedback so the user knows the command is working during slow
-    # bootstrap + first browser launch (which can easily take 10-30s every time).
-    dim = getattr(c, "dim", lambda s, e=True: s)
-    col = c.color_enabled()
-    print(dim("⏳ Starting oracle dash...", col))
-    print(dim("   Starting browser and fetching live usage from grok.com + claude.ai", col))
-    print(dim("   (this usually takes 10–30s; step-by-step progress will be printed)", col))
-    print()
+    # last_probe_result guarded by simple assignment (daemon worker never prints)
+    last_probe_result = {"st": None, "stderr_tail": []}
 
-    # Fast first paint: show something immediately with a placeholder.
-    # Real live status (which can take many seconds on first browser launch) is fetched
-    # right after the first frame or on the normal throttle schedule.
-    placeholder_st = {
-        "grok": "checking",
-        "claude": "checking",
-        "last_attempt": None,
-        "delegated": False,
-        "message": "starting browser + loading live data...",
-    }
+    def _probe_worker():
+        try:
+            while True:
+                blessed = os.path.expanduser("~/.local/share/token-oracle/venv/bin/oracle")
+                if os.path.isfile(blessed) and os.access(blessed, os.X_OK):
+                    cmd = [blessed, "live-probe", "--json"]
+                else:
+                    cmd = [sys.executable, "-m", "token_oracle.cli.main", "live-probe", "--json"]
+                try:
+                    proc = subprocess.run(
+                        cmd, capture_output=True, text=True, timeout=90
+                    )
+                    out = (proc.stdout or "").strip()
+                    err = (proc.stderr or "").strip()
+                    tail = [ln for ln in err.splitlines() if ln.strip()][-3:]
+                    snap = None
+                    if out:
+                        try:
+                            snap = json.loads(out)
+                        except Exception:
+                            snap = None
+                    last_probe_result["st"] = snap
+                    last_probe_result["stderr_tail"] = tail
+                except Exception:
+                    # swallow (timeout, no binary, etc); next cycle will retry
+                    pass
+                time.sleep(LIVE_PROBE_INTERVAL)
+        except Exception:
+            # daemon, never surface stack on shutdown
+            pass
 
+    # start background prober immediately (daemon)
+    worker = threading.Thread(target=_probe_worker, daemon=True, name="live-probe-worker")
+    worker.start()
+
+    # first frame uses whatever snapshot exists right now (may be stale/unavailable — honest)
     try:
-        first_frame = True
         while True:
             t = time.time()
-
             curr = run_forecast(t, cfg)
 
-            st_for_this_frame = last_live_st or (placeholder_st if first_frame else None)
+            # cheap read every frame; overlay decides what to show from provenance
+            snap = load_snapshot() or {}
+            last_live_cells = overlay_cells(curr, snap, t)
 
-            # Throttle expensive live probes after the first frame.
-            do_probe = first_frame or last_live_st is None or t - last_live_t > LIVE_STATUS_INTERVAL
-            if do_probe:
-                try:
-                    g_raw = lw.fetch_grok_live_usage(headless=True)
-                    c_raw = lw.fetch_claude_live_usage(headless=True)
-                    nowt = time.time()
-                    # Both now return ProviderLive natively (plans 031/032); legacy adapter deleted.
-                    g_pl = (
-                        g_raw
-                        if isinstance(g_raw, ProviderLive)
-                        else ProviderLive(
-                            provider="grok", state="needs_login", readings=[], fetched_at=nowt
-                        )
-                    )
-                    c_pl = (
-                        c_raw
-                        if isinstance(c_raw, ProviderLive)
-                        else ProviderLive(
-                            provider="claude", state="needs_login", readings=[], fetched_at=nowt
-                        )
-                    )
-                    providers = {"grok": g_pl, "claude": c_pl}
-                    save_snapshot(providers)
-                    last_live_st = {
-                        "grok": g_pl.state,
-                        "claude": c_pl.state,
-                        "last_attempt": nowt,
-                        "last_fetch": nowt,
-                        "delegated": bool(getattr(lw, "_BLESSED_PYTHON", None))
-                        and not bool(getattr(lw, "PLAYWRIGHT_AVAILABLE", False)),
-                        "message": (g_pl.note or c_pl.note or "")[:120],
-                    }
-                    snap_dict = {
-                        "version": 1,
-                        "written_at": nowt,
-                        "providers": {
-                            "grok": provider_live_to_dict(g_pl),
-                            "claude": provider_live_to_dict(c_pl),
-                        },
-                    }
-                    last_live_cells = overlay_cells(curr, snap_dict, nowt)
-                except Exception:
-                    last_live_st = {
-                        "grok": "error",
-                        "claude": "error",
-                        "message": "status check failed",
-                    }
-                    last_live_cells = last_live_cells or {}
-                last_live_t = t
-                first_frame = False
+            # derive minimal st for footer/src_note (render_frame untouched)
+            provs = snap.get("providers") or {}
+            if snap:
+                last_live_st = {
+                    "grok": (provs.get("grok") or {}).get("state", "unavailable"),
+                    "claude": (provs.get("claude") or {}).get("state", "unavailable"),
+                    "last_fetch": snap.get("written_at"),
+                    "last_attempt": snap.get("written_at"),
+                    "delegated": False,
+                    "message": "",
+                }
+            else:
+                last_live_st = None
 
             frame = render_frame(
                 curr,
                 t,
                 prev_forecasts=last_fs,
-                live_status=last_live_st or st_for_this_frame,
+                live_status=last_live_st,
                 cells=last_live_cells,
             )
             footer = c.dim("(ctrl-c to quit)  •  " + time.strftime("%H:%M:%S"), c.color_enabled())
