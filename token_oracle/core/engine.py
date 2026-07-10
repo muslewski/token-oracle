@@ -29,7 +29,10 @@ def _get_profile_config(cfg, pname, pdef):
 
 
 def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
-    """Run scan+compute for one (profile's) source/windows. Returns (updated_slice, list[Forecast])"""
+    """Run scan+compute for one (profile's) source/windows.
+
+    Returns (updated_slice, list[Forecast])
+    """
     from ..sources.base import get_source
 
     try:
@@ -77,7 +80,7 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
 
     forecasts = []
     for w in wins:
-        # Pass full normalized events (with model at idx 2) so model-filter windows (e.g. fable) work.
+        # Pass full normalized events (model at idx 2) so model-filter windows work.
         # compute_window accepts either pairs or full events.
         f = compute_window(events, now, w, prof)
         # For the 5h/current block on Claude, prefer server rate-limit data (exact website
@@ -96,7 +99,7 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
                     object.__setattr__(f, "reset_in_secs", data["reset_in_secs"])
                 if data.get("projected_pct") is not None:
                     object.__setattr__(f, "projected_pct", data["projected_pct"])
-                # When server gives %, compute a consistent used for display (local logs often undercount for the current 5h)
+                # Server % → compute used for display (local logs often undercount 5h)
                 if data.get("projected_pct") is not None and data.get("source") == "server":
                     object.__setattr__(f, "used", int(round(data["projected_pct"] / 100.0 * w.cap)))
             else:
@@ -206,9 +209,9 @@ def multi_forecast(now, config=None):
 def detect_resets(prev_fs, curr_fs, threshold_drop=0.3, low_abs=10000, high_prev=50000):
     """Detect sudden resets across profiles/windows.
 
-    Returns list of dicts: [{"profile":, "window":, "prev_used":, "curr_used":, "reset_in_secs":}, ...]
-    A reset is flagged when used drops sharply (curr < prev * threshold or curr low while prev high)
-    after a window's reset time or naturally.
+    Returns list of dicts like:
+      [{"profile":, "window":, "prev_used":, "curr_used":, "reset_in_secs":}, ...]
+    A reset is flagged when used drops sharply after reset time or naturally.
     Use to drive alarm UI.
     """
     resets = []

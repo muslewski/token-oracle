@@ -12,7 +12,10 @@ def _segment(f):
     pct = f.projected_pct
     prof = getattr(f, "profile", "default")
     pre = f"{prof[0].upper()}:" if prof != "default" else ""
-    body = f"{pre}{fmt_reset(f.reset_in_secs)} {fmt_tokens(f.used)}/{fmt_tokens(f.cap)} ->{round(pct)}%"
+    body = (
+        f"{pre}{fmt_reset(f.reset_in_secs)} "
+        f"{fmt_tokens(f.used)}/{fmt_tokens(f.cap)} ->{round(pct)}%"
+    )
     if f.eta_to_cap_secs is not None:
         body += f" cap {fmt_dh_long(f.eta_to_cap_secs)}"
     return f"{c.gauge_tmux(pct)}{body}#[default]"

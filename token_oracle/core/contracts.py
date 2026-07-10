@@ -31,6 +31,7 @@ class Forecast:
     """A computed usage window forecast. The `profile` tags the subscription
     (e.g. "claude", "grok") for multi-subscription support. Backward-compat:
     defaults to "default" so single-source code and old tests continue to work."""
+
     window: str
     used: int
     cap: int

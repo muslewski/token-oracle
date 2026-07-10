@@ -59,9 +59,7 @@ def load_signals_context(signals_path):
 @register("grok")
 class GrokSource:
     def __init__(self, opts):
-        self.sessions_dir = os.path.expanduser(
-            opts.get("sessions_dir") or "~/.grok/sessions"
-        )
+        self.sessions_dir = os.path.expanduser(opts.get("sessions_dir") or "~/.grok/sessions")
 
     def scan(self, files_state, now, window):
         cutoff = now - window
@@ -129,20 +127,27 @@ class GrokSource:
             base = session_max.get(sessdir, 0)
             # IMPORTANT: do NOT emit contextTokensUsed as quota burn deltas.
             # contextTokensUsed reflects *current conversation context window fill*
-            # (e.g. 120k/512k), NOT cumulative quota consumption toward weekly SuperGrok/Grok-build limits.
-            # Emitting it caused massive overcount (summing full context of every recent session).
-            # Only updates.jsonl _meta.totalTokens deltas (or small live increments) are used for burn.
-            # Signals still update last_total for potential live corrections and mtime freshness.
+            # (e.g. 120k/512k), NOT cumulative quota consumption toward weekly
+            # SuperGrok/Grok-build limits.
+            # Emitting it caused massive overcount (full context of every session).
+            # Only updates.jsonl _meta.totalTokens deltas (small increments) used.
+            # Signals still update last_total for live corrections and mtime freshness.
             evs = []
-            # Only inject a *tiny* live top-up if we have prior base and the diff is plausible small increment
+            # Only inject a *tiny* live top-up if prior base + diff is small increment
             # (defensive; avoids re-adding full context sizes as "used").
             if cum > base:
                 delta = cum - base
-                # Heuristic: only accept as burn increment if reasonably small (<= ~50k per live tick; real turns are smaller)
+                # Heuristic: accept burn inc only if small (<= ~50k per live tick)
                 if 0 < delta <= 50000:
                     evs.append((ts, delta, "grok-build", delta, 0, 0, 0, None))
             # Always store for last_total / future base
-            files[sp] = {"mtime": st.st_mtime, "size": st.st_size, "events": evs, "last_total": cum, "from_signals": True}
+            files[sp] = {
+                "mtime": st.st_mtime,
+                "size": st.st_size,
+                "events": evs,
+                "last_total": cum,
+                "from_signals": True,
+            }
             session_max[sessdir] = max(session_max.get(sessdir, 0), cum)
 
         for gone in [p for p in files if p not in seen and not p.endswith("signals.json")]:

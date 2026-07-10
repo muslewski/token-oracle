@@ -33,15 +33,14 @@ from .claude_extract import (
     readings_from_network_json as claude_readings_from_network_json,
 )
 from .contract import (
+    STATE_AUTH_NO_DATA,
     STATE_NEEDS_LOGIN,
-    STATE_STALE,
-    STATE_UNAVAILABLE,
     ProviderLive,
     provider_live_from_dict,
 )
-from .store import load_snapshot
 from .extract_common import (
     build_provider_live,
+    is_bot_challenge,
     merge_readings,
     monotonic_guard,
 )
@@ -51,6 +50,7 @@ from .grok_extract import (
     readings_from_progressbars,
     readings_from_reset_text,
 )
+from .store import load_snapshot
 
 PLAYWRIGHT_AVAILABLE = False
 sync_playwright = None  # type: ignore
@@ -220,7 +220,8 @@ def fetch_grok_live_usage(
     when playwright unavailable and delegation failed.
     Progress messages (if any) go to the progress callback or stderr; never stdout.
     """
-    if not PLAYWRIGHT_AVAILABLE:
+    # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False + _maybe_start_virtual_display()
+    if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         delegated = _delegate_to_blessed(
             "fetch_grok_live_usage", headless=headless, timeout_ms=timeout_ms
         )
@@ -235,11 +236,18 @@ def fetch_grok_live_usage(
                 return None
         return None
 
+    # Env opt-in: when TOKEN_ORACLE_LIVE_HEADED=1, force headed + virtual display
+    if os.environ.get("TOKEN_ORACLE_LIVE_HEADED") == "1":
+        headless = False
+
     now = time.time()
     url = "https://grok.com/settings/usage"
     profile_dir = _get_profile_dir("grok")
 
+    xvfb_proc = None
     try:
+        if not headless:
+            xvfb_proc = _maybe_start_virtual_display()
         _emit(progress, "   • launching browser (Chromium) for grok.com ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
@@ -304,6 +312,44 @@ def fetch_grok_live_usage(
             except Exception:
                 final_url = url
                 page_title = ""
+
+            # Bot-challenge handling after initial navigation: poll re-reading title/body
+            # up to 20s (1s interval). If clears, continue; else return auth_no_data + note.
+            try:
+                try:
+                    body_text = page.inner_text("body") or ""
+                except Exception:
+                    body_text = ""
+                if is_bot_challenge(page_title, body_text):
+                    _emit(progress, "   • bot challenge; polling up to 20s...")
+                    poll_start = time.time()
+                    cleared = False
+                    while time.time() - poll_start < 20.0:
+                        time.sleep(1.0)
+                        try:
+                            page_title = page.title() or ""
+                            body_text = page.inner_text("body") or ""
+                            final_url = getattr(page, "url", url) or url
+                            if not is_bot_challenge(page_title, body_text):
+                                cleared = True
+                                break
+                        except Exception:
+                            pass
+                    if not cleared:
+                        context.close()
+                        return ProviderLive(
+                            provider="grok",
+                            state=STATE_AUTH_NO_DATA,
+                            readings=[],
+                            fetched_at=now,
+                            error=None,
+                            note=(
+                                "blocked by bot challenge "
+                                f"(final_url={final_url}, title={page_title})"
+                            ),
+                        )
+            except Exception:
+                pass
 
             # Login wall check (after navigation attempts).
             try:
@@ -447,6 +493,12 @@ def fetch_grok_live_usage(
 
     except Exception:
         return None
+    finally:
+        if xvfb_proc:
+            try:
+                xvfb_proc.terminate()
+            except Exception:
+                pass
 
 
 def fetch_claude_live_usage(
@@ -458,7 +510,8 @@ def fetch_claude_live_usage(
     when playwright unavailable and delegation failed.
     Uses short TTL cache keyed claude:{headless}.
     """
-    if not PLAYWRIGHT_AVAILABLE:
+    # TOKEN_ORACLE_LIVE_HEADED=1: use headless=False + _maybe_start_virtual_display()
+    if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         delegated = _delegate_to_blessed(
             "fetch_claude_live_usage", headless=headless, timeout_ms=timeout_ms
         )
@@ -473,11 +526,18 @@ def fetch_claude_live_usage(
                 return None
         return None
 
+    # Env opt-in: when TOKEN_ORACLE_LIVE_HEADED=1, force headed + virtual display
+    if os.environ.get("TOKEN_ORACLE_LIVE_HEADED") == "1":
+        headless = False
+
     now = time.time()
     url = "https://claude.ai/settings/usage"
     profile_dir = _get_profile_dir("claude")
 
+    xvfb_proc = None
     try:
+        if not headless:
+            xvfb_proc = _maybe_start_virtual_display()
         _emit(progress, "   • launching browser (Chromium) for claude.ai ...")
         with sync_playwright() as p:
             context = p.chromium.launch_persistent_context(
@@ -529,6 +589,44 @@ def fetch_claude_live_usage(
             except Exception:
                 final_url = url
                 page_title = ""
+
+            # Bot-challenge handling after initial navigation: poll re-reading title/body
+            # up to 20s (1s interval). If clears, continue; else return auth_no_data + note.
+            try:
+                try:
+                    body_text = page.inner_text("body") or ""
+                except Exception:
+                    body_text = ""
+                if is_bot_challenge(page_title, body_text):
+                    _emit(progress, "   • bot challenge; polling up to 20s...")
+                    poll_start = time.time()
+                    cleared = False
+                    while time.time() - poll_start < 20.0:
+                        time.sleep(1.0)
+                        try:
+                            page_title = page.title() or ""
+                            body_text = page.inner_text("body") or ""
+                            final_url = getattr(page, "url", url) or url
+                            if not is_bot_challenge(page_title, body_text):
+                                cleared = True
+                                break
+                        except Exception:
+                            pass
+                    if not cleared:
+                        context.close()
+                        return ProviderLive(
+                            provider="claude",
+                            state=STATE_AUTH_NO_DATA,
+                            readings=[],
+                            fetched_at=now,
+                            error=None,
+                            note=(
+                                "blocked by bot challenge "
+                                f"(final_url={final_url}, title={page_title})"
+                            ),
+                        )
+            except Exception:
+                pass
 
             # Login wall check (after navigation).
             try:
@@ -687,6 +785,12 @@ def fetch_claude_live_usage(
 
     except Exception:
         return None
+    finally:
+        if xvfb_proc:
+            try:
+                xvfb_proc.terminate()
+            except Exception:
+                pass
 
 
 def launch_login_session(provider: str = "grok", headless: bool = False) -> bool:
@@ -700,7 +804,7 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
         * Run the setup once on a machine with GUI and rsync the profile dir
         * Use the direct URLs printed below and somehow get cookies into the profile
     """
-    if not PLAYWRIGHT_AVAILABLE:
+    if not PLAYWRIGHT_AVAILABLE or sync_playwright is None:
         print("Playwright is not installed in the current Python environment.")
         print("Run `oracle live-setup` (it can set things up automatically).")
         return False

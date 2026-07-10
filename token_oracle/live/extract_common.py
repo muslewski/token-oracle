@@ -5,6 +5,8 @@ providers can reuse merge_readings / monotonic_guard / build_provider_live
 without duplication. Grok behavior is unchanged (defaults preserve it).
 """
 
+import re
+
 from .contract import (
     CONF_HIGH,
     CONF_LOW,
@@ -281,3 +283,20 @@ def build_provider_live(
         error=None,
         note=note[:160] if note else "",
     )
+
+
+def is_bot_challenge(title: str, body_text: str) -> bool:
+    """Return True for Cloudflare 'Just a moment...' interstitials that block headless.
+
+    Matches:
+    - title containing 'just a moment' (case-insensitive)
+    - body containing any of: 'performing security verification',
+      'security service to protect', 'cloudflare' (case-insensitive)
+    """
+    t = (title or "").lower()
+    b = (body_text or "").lower()
+    if "just a moment" in t:
+        return True
+    if re.search(r"performing security verification|security service to protect|cloudflare", b):
+        return True
+    return False
