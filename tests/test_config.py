@@ -243,3 +243,42 @@ def test_default_plan_and_cost_mode_when_missing(tmp_path):
     assert c.plan == "max20"
     assert c.cost_mode == "auto"
     assert c.pricing == {}
+
+
+def test_live_headed_parsed_true(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"plan": "max20", "live": {"headed": True}}))
+    c = CFG.load_config(str(p))
+    assert c.headed_enabled() is True
+    assert c.live == {"headed": True}
+
+
+def test_live_headed_default_false(tmp_path):
+    c = CFG.load_config(str(tmp_path / "none.json"))
+    assert c.headed_enabled() is False
+    # internal: absent "live" in source normalizes to explicit false (defensive)
+    assert c.live.get("headed") is False
+
+
+def test_live_headed_invalid_ignored(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"live": {"headed": "yes"}}))
+    c = CFG.load_config(str(p))
+    assert c.headed_enabled() is False
+    assert any("live.headed" in iss for iss in c.issues)
+    # does not crash, falls back
+
+
+def test_update_config_file_roundtrip(tmp_path):
+    p = tmp_path / "c.json"
+    # seed with a plan so we can assert preservation
+    p.write_text(json.dumps({"plan": "pro"}))
+    CFG.update_config_file(str(p), {"live": {"headed": True}})
+    loaded = json.loads(p.read_text())
+    assert loaded.get("live", {}).get("headed") is True
+    assert loaded.get("plan") == "pro"
+    # flip it
+    CFG.update_config_file(str(p), {"live": {"headed": False}})
+    loaded2 = json.loads(p.read_text())
+    assert loaded2.get("live", {}).get("headed") is False
+    assert loaded2.get("plan") == "pro"  # still present

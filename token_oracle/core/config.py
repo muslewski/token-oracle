@@ -230,6 +230,10 @@ class Config:
     profiles: dict = field(
         default_factory=dict
     )  # multi-sub: {"claude": {"source":.., "windows":..}, "grok": ...}
+    live: dict = field(default_factory=dict)  # {"headed": bool} — real (headed) live probing
+
+    def headed_enabled(self) -> bool:
+        return bool(self.live.get("headed"))
 
 
 def _xdg(env, default_tail):
@@ -439,6 +443,18 @@ def load_config(path: str | None = None) -> "Config":
         else:
             issues.append(f"profiles[{pname!r}] ignored (not an object)")
 
+    live = raw.get("live", {})
+    if not isinstance(live, dict):
+        issues.append('config "live" must be an object — ignoring')
+        live = {}
+    else:
+        h = live.get("headed", False)
+        if not isinstance(h, bool):
+            issues.append('config "live.headed" must be true/false — ignoring')
+            live = {}
+        else:
+            live = {"headed": h}
+
     return Config(
         source=raw.get("source", "claude_code"),
         source_opts=raw.get("source_opts", {}),
@@ -449,6 +465,7 @@ def load_config(path: str | None = None) -> "Config":
         cost_mode=cost_mode,
         pricing=pricing,
         profiles=norm_profiles,
+        live=live,
     )
 
 
@@ -461,4 +478,42 @@ def write_default_config(path=None, preset="max20", force=False) -> str:
         os.makedirs(d, exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(PRESETS[preset], fh, indent=2)
+    return path
+
+
+def update_config_file(path: str | None, updates: dict) -> str:
+    """Deep-ish merge `updates` into the JSON config at `path` (or the default
+    path), preserving all other keys, and write atomically. Returns the path."""
+    import tempfile
+
+    path = os.path.expanduser(path or default_config_path())
+    data = {}
+    if os.path.exists(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                loaded = json.load(fh)
+            if isinstance(loaded, dict):
+                data = loaded
+        except (OSError, ValueError):
+            data = {}
+    for k, v in updates.items():
+        if isinstance(v, dict) and isinstance(data.get(k), dict):
+            merged = dict(data[k])
+            merged.update(v)
+            data[k] = merged
+        else:
+            data[k] = v
+    d = os.path.dirname(path)
+    if d:
+        os.makedirs(d, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=d or ".", prefix=".config-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+        os.replace(tmp, path)
+    finally:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
     return path
