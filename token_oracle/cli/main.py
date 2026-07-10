@@ -324,12 +324,16 @@ def main(argv=None):
 
         return run_dash(cfg)
 
+    if args.cmd == "live":
+        return _live_toggle(cfg, args)
+
     if args.cmd == "live-probe":
         _bootstrap_playwright_if_needed()
         from ..live.probe import run_probe
 
         prov = args.provider
-        headless = os.environ.get("TOKEN_ORACLE_LIVE_HEADED") != "1"
+        headed = os.environ.get("TOKEN_ORACLE_LIVE_HEADED") == "1" or cfg.headed_enabled()
+        headless = not headed
         snap = run_probe(
             providers=prov,
             headless=headless,
@@ -450,6 +454,55 @@ def _bootstrap_playwright_if_needed():
         os.execve(venv_oracle, [venv_oracle] + sys.argv[1:], env)
     else:
         os.execve(venv_py, [venv_py, "-m", "token_oracle.cli.main"] + sys.argv[1:], env)
+
+
+def _live_toggle(cfg, args):
+    import shutil
+    from ..cli import colors as c
+    from ..core.config import update_config_file, default_config_path
+    from ..live.store import load_snapshot
+
+    color = c.color_enabled()
+    has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+    has_xvfb = bool(shutil.which("Xvfb"))
+    can_headed = has_display or has_xvfb
+
+    if args.action == "status":
+        on = cfg.headed_enabled()
+        print(c.violet("real data (headed live probing): ", color) + ("ON" if on else "OFF"))
+        print(f"  display present: {has_display}   Xvfb installed: {has_xvfb}")
+        if on and not can_headed:
+            print(_xvfb_hint())
+        # last probed states, if any
+        snap = load_snapshot() or {}
+        for pn in ("grok", "claude"):
+            pdat = (snap.get("providers") or {}).get(pn, {})
+            st = pdat.get("state", "not probed") if isinstance(pdat, dict) else "not probed"
+            print(f"  {pn}: {st}")
+        return 0
+
+    if args.action == "on":
+        path = update_config_file(args.config, {"live": {"headed": True}})
+        print(c.ok_badge(True, color) + f" real data enabled (headed probing) — {path}")
+        if not can_headed:
+            print(_xvfb_hint())
+        else:
+            print("  Run `oracle dash` (or `oracle live-probe`) to see live data.")
+        return 0
+
+    # off
+    path = update_config_file(args.config, {"live": {"headed": False}})
+    print(c.ok_badge(True, color) + f" real data disabled — {path}")
+    return 0
+
+
+def _xvfb_hint():
+    return (
+        "  ⚠ headed mode needs a graphical display or Xvfb (virtual display).\n"
+        "    Install Xvfb:  Arch: sudo pacman -S xorg-server-xvfb   "
+        "Debian/Ubuntu: sudo apt install xvfb\n"
+        "    Until then, live probing will honestly report 'unavailable'."
+    )
 
 
 def _live_setup(cfg, args):
