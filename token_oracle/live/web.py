@@ -51,6 +51,7 @@ from .grok_extract import (
     readings_from_network_json,
     readings_from_progressbars,
     readings_from_reset_text,
+    readings_from_usage_modal,
 )
 from .store import load_snapshot
 
@@ -326,7 +327,13 @@ def fetch_grok_live_usage(
             except Exception:
                 pass
 
-            _emit(progress, "   • loading grok usage page and waiting for data...")
+            # The weekly usage cap lives in the ?_s=usage MODAL, not /settings/usage
+            # (that path client-redirects to the chat shell — no meters there). Open
+            # the modal on whatever URL we landed on.
+            landed = getattr(page, "url", "https://grok.com/") or "https://grok.com/"
+            sep = "&" if "?" in landed else "?"
+            url = landed + sep + "_s=usage"
+            _emit(progress, "   • opening grok usage modal (?_s=usage)...")
             try:
                 page.goto(url, wait_until="domcontentloaded", timeout=timeout_ms)
             except Exception:
@@ -337,11 +344,15 @@ def fetch_grok_live_usage(
             except Exception:
                 pass
 
-            # Single targeted wait for progress UI (no click cascades).
+            # The modal renders its % as plain text (no progressbars) — wait for text.
             try:
-                page.wait_for_selector('[role="progressbar"], progress', timeout=8000)
+                page.wait_for_function(
+                    "() => /Heavy Limit|%\\s*used/i.test(document.body.innerText||'')",
+                    timeout=10000,
+                )
             except Exception:
                 pass
+            page.wait_for_timeout(1200)
 
             try:
                 final_url = getattr(page, "url", url) or url
@@ -454,8 +465,36 @@ def fetch_grok_live_usage(
             except Exception:
                 facts = {"bars": [], "sections": []}
 
-            # Feed the pure extractors.
+            # The weekly usage cap is plain text in the ?_s=usage modal. Grab the
+            # tightest element whose text holds both a weekly-limit label and
+            # "% used"; fall back to a bounded body slice.
+            modal_text = ""
+            try:
+                modal_text = (
+                    page.evaluate(
+                        """() => {
+  let best = '';
+  for (const el of document.querySelectorAll('div,section,main,aside')) {
+    const t = (el.innerText || '').trim();
+    if (/Heavy Limit|Weekly.{0,30}Limit/i.test(t) && /%\\s*used/i.test(t) && t.length < 600) {
+      if (!best || t.length < best.length) best = t;
+    }
+  }
+  return best || (document.body.innerText || '').slice(0, 1500);
+}"""
+                    )
+                    or ""
+                )
+            except Exception:
+                modal_text = ""
+
+            # Feed the pure extractors. The usage modal is the primary source for
+            # grok's weekly cap; the rest remain as fallbacks.
             readings: list = []
+            try:
+                readings.extend(readings_from_usage_modal(modal_text, now))
+            except Exception:
+                pass
             for u, obj in captured:
                 try:
                     rs = readings_from_network_json(u, obj, now)
@@ -508,12 +547,13 @@ def fetch_grok_live_usage(
                         except Exception:
                             pass
                         with open(dump_path, "w", encoding="utf-8") as df:
-                            df.write("URL: https://grok.com/settings/usage (attempted)\n")
+                            df.write("URL: " + str(url) + " (?_s=usage modal)\n")
                             df.write("final_url: " + str(final_url) + "\n")
                             df.write("page_title: " + str(page_title) + "\n")
                             df.write("fetched_at: " + str(now) + "\n")
                             df.write("state: " + str(pl.state) + "\n")
                             df.write("readings: " + str(len(pl.readings)) + "\n\n")
+                            df.write("=== MODAL TEXT ===\n" + str(modal_text)[:1500] + "\n\n")
                             df.write("=== BARS ===\n" + str(facts.get("bars")) + "\n\n")
                             df.write("=== SECTIONS (first few) ===\n")
                             for s in (facts.get("sections") or [])[:5]:

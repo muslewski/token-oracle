@@ -118,6 +118,24 @@ dash` look in a real terminal — Fable should show `● live 99%`; (2) note the
 (`~/.local/share/token-oracle/venv/bin/oracle`) if `oracle` ever
 `ModuleNotFoundError`s again.
 
+**Plan 038 — 2026-07-11 at `b40dbbc` (grok live weekly usage). ⚠️ RC-B was WRONG.**
+The prior conclusion "grok has no usage % page" was a **wrong diagnosis caused by
+probing the wrong route**. `settings/usage` bounces to the chat shell, but grok's
+real usage surface is the **`?_s=usage` modal** (open it as `https://grok.com/?_s=usage`).
+Live-probed on a logged-in SuperGrok **Heavy** account, it renders:
+`Weekly SuperGrok Heavy Limit — 23% used · Resets July 17, 2026 · Grok Build 22% · API 1%`.
+The %s are **plain text** (no `aria-valuenow` bars, no clean JSON endpoint — checked
+`/rest/products` = Stripe catalog, `/rest/subscriptions` = tier, `/rest/rate-limits`
+= 2h window, `/rest/tasks` = Tasks quota). 038 repoints `fetch_grok_live_usage` to the
+modal + adds a text-anchored `readings_from_usage_modal` (`weekly_pct`,
+`model_weekly_pct model=grok_build`, absolute `reset_at`). Implemented **directly by
+the advisor** (operator chose direct over an executor — small change + advisor must run
+the live headed verify anyway). **LIVE PROOF (headed Xvfb probe):** grok `state=ok`,
+`weekly_pct=23.0` HIGH, `model_weekly_pct=22.0 grok_build` HIGH, `reset_at`=Jul 17 2026 —
+dash header shows `grok ● live 23%`, grok panel weekly row live. Gates: 219 passed
+(+8), ruff/format/mypy clean. Also fixed the dash provenance domain (`grok.ai`→`grok.com`).
+Supersedes the RC-B "not planned / rate_data_only is truthful" disposition below.
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
@@ -164,6 +182,7 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 035 | Headed display lifecycle — shared virtual display, never lie when no display | P1 | M | — | DONE — executed 2026-07-10 by grok-xhigh on advisor/035 (7 commits), merged to main at `f337ca2`. Gates re-run by advisor: 201 passed (+6 tests), ruff/format/mypy clean on the 4 in-scope files, all done-criteria greps pass. **Behavioral proof**: headed `--provider all` → grok `rate_data_only` + **claude `ok` (3 readings) after grok** (the RC-A scenario that used to fail), stdout valid JSON (RC-C). Executor correctly used direct `STATE_UNAVAILABLE` where `build_provider_live` would have lied `needs_login`. |
 | 036 | `oracle live on/off/status` — persistent real-data toggle + Xvfb guidance | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/036 (7 commits), merged to main at `3611055`. Gates re-run by advisor: 208 passed (+7), ruff/format/mypy clean on its files. **Behavioral**: `live status`→OFF + display/Xvfb lines + last states; `live on`→writes `{"live":{"headed":true}}`, `headed_enabled()` True, shows "Run oracle dash" (Xvfb present, no warning); `live off`→False. `app.py` untouched (Step 4 correctly concluded dash inherits headed via the default config the spawned live-probe loads). |
 | 037 | Claude Fable weekly row separated from All-models (high-conf `model_weekly_pct`) | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/037 (3 commits), merged to main at `98f364c`. Gates re-run by advisor: 211 passed (+3), ruff/format/mypy clean on its files (the 2 E501 in test_live_claude_extract.py:78,210 are pre-existing, confirmed on base). **LIVE PROOF (headed probe against the worktree)**: claude `ok`, `weekly_pct=60` (All models, HIGH) + `model_weekly_pct=99 model=fable` (HIGH) — clean per-meter evidence, no "Fabl" bleed. **Full overlay E2E on main**: `(claude,fable)` cell = 99.0 live, `(claude,weekly)`=60.0, `(claude,5h)`=26.0 — all high-conf applied. |
+| 038 | Grok live weekly usage via `?_s=usage` modal (corrects wrong RC-B "no page") | P1 | S | 035, 037 | DONE — implemented **directly by advisor** 2026-07-11 on advisor/038 (operator chose direct over executor). Root cause was the wrong route (`settings/usage` bounces); real surface is the `?_s=usage` modal (plain-text %s, no aria/JSON). Repointed `fetch_grok_live_usage` + added text-anchored `readings_from_usage_modal` + `parse_absolute_reset` + overlay `grok_build` cell + dash domain fix. **LIVE PROOF (headed Xvfb)**: grok `state=ok`, `weekly_pct=23.0` HIGH, `model_weekly_pct=22.0 grok_build` HIGH, `reset_at`=Jul 17 2026; dash header `grok ● live 23%`, panel weekly row live. Gates: 219 passed (+8), ruff/format/mypy clean. |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 

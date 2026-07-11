@@ -102,8 +102,10 @@ def overlay_cells(
 
             if metric == METRIC_WEEKLY_PCT:
                 cells[(p_c, "weekly")] = cell
-            elif metric == METRIC_MODEL_WEEKLY_PCT and r.get("model") == "fable":
-                cells[(p_c, "fable")] = cell
+            elif metric == METRIC_MODEL_WEEKLY_PCT and r.get("model") in ("fable", "grok_build"):
+                # fable -> claude Fable row; grok_build -> grok sub-cell (snapshot only,
+                # no dash row today). api breakdown stays info-only (never a cell).
+                cells[(p_c, str(r.get("model")))] = cell
             elif metric == METRIC_FIVE_HOUR_PCT:
                 cells[(p_c, "5h")] = cell
             elif metric == METRIC_FIVE_HOUR_STATE:

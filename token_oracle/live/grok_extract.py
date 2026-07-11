@@ -2,12 +2,14 @@
 evidence. No generic fallbacks: a percentage with no recognized label is not
 data, it is noise. Returns [] rather than guessing."""
 
+import datetime as _dt
 import re
 from typing import Any
 
 from .contract import (
     CONF_HIGH,
     CONF_MEDIUM,
+    METRIC_MODEL_WEEKLY_PCT,
     METRIC_RATE_WINDOW,
     METRIC_RESET_AT,
     METRIC_WEEKLY_PCT,
@@ -282,4 +284,135 @@ def readings_from_reset_text(sections: list[str], now: float) -> list[LiveReadin
                 )
         except Exception:
             pass
+    return readings
+
+
+# --- Usage modal (grok.com/?_s=usage) ---------------------------------------
+# The real weekly usage cap lives only in the ?_s=usage modal DOM text (there are
+# no aria-valuenow bars, no clean JSON endpoint). Extraction is text-anchored on
+# the fixed UI labels. Live-captured shape:
+#   "Weekly SuperGrok Heavy Limit 23% used Resets July 17, 2026 at 7:46 AM
+#    Grok Build 22% API 1%"
+
+_ABS_RESET_RE = re.compile(
+    r"(?i)resets?\s+([A-Z][a-z]+)\s+(\d{1,2}),?\s+(\d{4})\s+at\s+(\d{1,2}):(\d{2})\s*([AP]M)"
+)
+_WEEKLY_LIMIT_RE = re.compile(
+    r"(?i)(?:weekly\s+supergrok\s+heavy\s+limit|weekly\b[^%]{0,30}?\blimit)"
+    r"\D{0,40}?(\d{1,3}(?:\.\d)?)\s*%\s*used"
+)
+_GROK_BUILD_RE = re.compile(r"(?i)grok\s*build\D{0,6}(\d{1,3}(?:\.\d)?)\s*%")
+_API_RE = re.compile(r"(?i)\bAPI\b\D{0,6}(\d{1,3}(?:\.\d)?)\s*%")
+
+
+def parse_absolute_reset(text: str, now: float) -> LiveReading | None:
+    """Parse 'Resets July 17, 2026 at 7:46 AM' -> METRIC_RESET_AT epoch.
+
+    The date is rendered by grok.com in the viewer's local timezone, so a naive
+    strptime + .timestamp() (local) matches what the user sees. Returns None when
+    no absolute reset phrase is present or the result is not a plausible future
+    reset (within ~40 days).
+    """
+    if not text:
+        return None
+    m = _ABS_RESET_RE.search(text)
+    if not m:
+        return None
+    month, day, year, hh, mm, ap = m.groups()
+    try:
+        dt = _dt.datetime.strptime(
+            f"{month} {day} {year} {hh}:{mm} {ap.upper()}", "%B %d %Y %I:%M %p"
+        )
+        epoch = dt.timestamp()  # naive -> local tz, matches grok.com's rendering
+    except Exception:
+        return None
+    if not (now < epoch < now + 40 * 86400):
+        return None
+    return LiveReading(
+        provider="grok",
+        metric=METRIC_RESET_AT,
+        value=epoch,
+        confidence=CONF_HIGH,
+        extractor="grok.usage_modal.reset",
+        evidence=m.group(0)[:160],
+        fetched_at=now,
+    )
+
+
+def readings_from_usage_modal(text: str, now: float) -> list[LiveReading]:
+    """Extract grok's weekly usage cap from the ?_s=usage modal text.
+
+    Anchored strictly on the 'Weekly ... Limit ... N% used' label — a bare N%
+    with no weekly-limit label emits nothing (that is noise, per the contract).
+    Also emits the Grok Build / API sub-breakdown as model_weekly_pct readings,
+    and the absolute reset time.
+    """
+    readings: list[LiveReading] = []
+    if not text:
+        return readings
+
+    m = _WEEKLY_LIMIT_RE.search(text)
+    if m:
+        try:
+            val = round(float(m.group(1)), 1)
+            if 0 <= val <= 100:
+                readings.append(
+                    LiveReading(
+                        provider="grok",
+                        metric=METRIC_WEEKLY_PCT,
+                        value=val,
+                        confidence=CONF_HIGH,
+                        extractor="grok.usage_modal.text",
+                        evidence=text[max(0, m.start()) : m.end() + 20][:160],
+                        fetched_at=now,
+                    )
+                )
+        except Exception:
+            pass
+
+    # Sub-breakdown: only trust the API row when the Grok Build row is also present
+    # (they always render together in the modal). This stops a stray "API" elsewhere
+    # on the page from becoming a reading.
+    gb = _GROK_BUILD_RE.search(text)
+    if gb:
+        try:
+            gbv = round(float(gb.group(1)), 1)
+            if 0 <= gbv <= 100:
+                readings.append(
+                    LiveReading(
+                        provider="grok",
+                        metric=METRIC_MODEL_WEEKLY_PCT,
+                        value=gbv,
+                        confidence=CONF_HIGH,
+                        extractor="grok.usage_modal.text",
+                        evidence=gb.group(0)[:160],
+                        fetched_at=now,
+                        model="grok_build",
+                    )
+                )
+        except Exception:
+            pass
+        api = _API_RE.search(text)
+        if api:
+            try:
+                apv = round(float(api.group(1)), 1)
+                if 0 <= apv <= 100:
+                    readings.append(
+                        LiveReading(
+                            provider="grok",
+                            metric=METRIC_MODEL_WEEKLY_PCT,
+                            value=apv,
+                            confidence=CONF_HIGH,
+                            extractor="grok.usage_modal.text",
+                            evidence=api.group(0)[:160],
+                            fetched_at=now,
+                            model="api",
+                        )
+                    )
+            except Exception:
+                pass
+
+    rst = parse_absolute_reset(text, now)
+    if rst is not None:
+        readings.append(rst)
     return readings
