@@ -4,6 +4,7 @@ progress, and RESET alarm animations that people will remember."""
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import threading
@@ -58,31 +59,57 @@ ACTIVITY_H = 3
 FOOTER_H = 1
 
 
-def _panel_block_height(n_windows: int) -> int:
-    """Top + bottom + exactly 3 lines per window (head/meta/provenance)."""
+def _panel_block_height(n_windows: int, detail: int = 2) -> int:
+    """Top + bottom + (detail+1) lines per window row."""
     n = max(1, int(n_windows or 1))
-    return 2 + 3 * n
+    return 2 + (detail + 1) * n
 
 
-def panel_height(groups: dict) -> int:
-    """Compute the panels region height for the current groups shape.
+def panel_height(groups: dict, detail: int = 2) -> int:
+    """Compute the panels region height for the current groups shape + detail.
 
     Side-by-side when exactly two profiles with equal window counts: use the
     block height of one (shorter is padded in render). Stacked otherwise.
-    The value is independent of per-frame data content.
+    The value is independent of per-frame data content (only shape + detail).
     """
     if not groups:
-        return _panel_block_height(1)  # (no data) padded block
+        return _panel_block_height(1, detail)  # (no data) padded block
     pnames = list(groups.keys())
     if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
         n = len(groups[pnames[0]])
-        return _panel_block_height(n)
+        return _panel_block_height(n, detail)
     total = 0
     for _pn, fs in groups.items():
         n = len(fs) or 1
-        total += _panel_block_height(n)
+        total += _panel_block_height(n, detail)
         total += 1  # inter-block gap line
     return total
+
+
+def _compact_profile_line(pname, forecasts, now, enabled, cells=None) -> str:
+    """One-line summary for a profile (used when the terminal is too short for
+    boxes): icon + name + each active window's freshest %. 5h uses local
+    real-time usage; caps use the web cell when present, else local projection."""
+    cells = cells or {}
+    p_canon = "grok" if "grok" in pname.lower() else "claude"
+    icon = _profile_icon(pname)
+    parts: list[str] = []
+    for f in sorted(forecasts, key=lambda x: x.window):
+        ww = (f.window or "").lower()
+        if bool(getattr(f, "idle", False)):
+            continue
+        is_5h = "5h" in ww or "session" in ww or "current" in ww
+        if is_5h:
+            pct = (100.0 * f.used / f.cap) if getattr(f, "cap", 0) else 0.0
+            short = "5h"
+        else:
+            wkey = "weekly" if ww in ("weekly", "week") else ("fable" if ww == "fable" else None)
+            cell = cells.get((p_canon, wkey)) if wkey else None
+            pct = cell.pct if (cell and cell.pct is not None) else f.projected_pct
+            short = "wk" if ww in ("weekly", "week") else (ww or "?")
+        parts.append(f"{short} {round(pct)}%")
+    body = " · ".join(parts) if parts else "no active windows"
+    return c.dim(f"{icon} {pname.lower()}  {body}", enabled)
 
 
 def _row_glyph(cell, is_idle: bool) -> str:
@@ -94,15 +121,14 @@ def _row_glyph(cell, is_idle: bool) -> str:
     return "◌"
 
 
-def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
-    """Render a boxed panel using fixed 3-line rows (head/meta/provenance).
-
-    Every window (idle or active) contributes exactly 3 lines after top/bot.
-    The displayed % is live (from cell.pct) when available, else local projection.
-    Glyphs: ● live, ◌ local projection, – idle.
-    Meta and provenance explicitly distinguish live vs local; "live"/"real data"
-    wording only appears for rows where cell.pct is not None.
+def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66, detail=2):
+    """Render a boxed panel. `detail` sets lines per window row (height ladder):
+      2 = head + meta + provenance (full), 1 = head + meta, 0 = head only.
+    Row count per window is constant for a given detail, preserving height
+    invariance within a level. Glyphs: ● live, ◌ local projection, – idle.
+    Meta/provenance distinguish live vs local; source wording names the truth.
     """
+    per_row = detail + 1  # lines emitted per window row
     icon = _profile_icon(pname)
     title = f"{icon} {pname.upper()}"
     if "grok" in pname.lower():
@@ -111,10 +137,10 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
         title += "  Max 20×"
     lines = [c.violet(c.box_top(title, width, enabled), enabled)]
     if not forecasts:
-        # (no data) block padded to exactly 3 lines for height invariance
+        # (no data) block padded to per_row lines for height invariance
         lines.append(c.box_line(c.dim("(no data)", enabled), width, enabled))
-        lines.append(c.box_line(c.dim("", enabled), width, enabled))
-        lines.append(c.box_line(c.dim("", enabled), width, enabled))
+        for _ in range(per_row - 1):
+            lines.append(c.box_line(c.dim("", enabled), width, enabled))
         lines.append(c.box_bot(width, enabled))
         return lines
 
@@ -142,26 +168,23 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
             # affects meta/provenance
             reset_str = _fmt_reset_abs(f.reset_in_secs, now)
             head = f"{glyph} {wname:<6} idle  resets {reset_str}"
-            lines.append(c.box_line(head, width, enabled))
-
             if is_5h and cell and cell.state_value == "starts_on_first_message":
                 # ONLY website phrasing when the cell carries the state (plan 034 + 030)
                 meta = "   (5h window activates on first use; resets 5h later)"
-                lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
                 age = int(cell.age_secs) if getattr(cell, "age_secs", None) is not None else 0
                 # avoid "live" wording when this row does not carry a live pct number
-                # (0% placeholder)
                 prov = f"5h — from claude.ai ({age}s ago)" if age else "5h — from claude.ai"
-                lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
             elif is_5h:
                 meta = "   5h — no recent activity (live web gives exact after login)"
-                lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
                 prov = "local projection — no reliable live data (unavailable)"
-                lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
             else:
                 # blank meta + honest local prov for ordinary idle windows
-                lines.append(c.box_line(c.dim("", enabled), width, enabled))
+                meta = ""
                 prov = "local projection — live disabled"
+            lines.append(c.box_line(head, width, enabled))
+            if detail >= 1:
+                lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
+            if detail >= 2:
                 lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
             continue
 
@@ -203,7 +226,8 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
             meta += f"  proj {proj_pct}% end-of-window"
         elif f.eta_to_cap_secs is not None:
             meta += f"  ETA {fmt_dh_long(f.eta_to_cap_secs)}"
-        lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
+        if detail >= 1:
+            lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
 
         # provenance names the ACTUAL source of the head number
         if row_src == "local":
@@ -227,7 +251,8 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
             prov = f"local projection — no reliable live data ({cell.state})"
         else:
             prov = "local projection — live disabled"
-        lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
+        if detail >= 2:
+            lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
 
     lines.append(c.box_bot(width, enabled))
     return lines
@@ -307,17 +332,17 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
         # Reserved 1-line slot for reset alarm (populated by run() via its scene fills)
         return [""]
 
-    def panels_fill() -> list[str]:
+    def panels_fill(detail: int = 2) -> list[str]:
         if not groups:
             return [c.dim("(no windows / no data — run with active usage)", enabled)]
         pnames = list(groups.keys())
         out: list[str] = []
         if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
             left = _render_profile_block(
-                pnames[0], groups[pnames[0]], now, enabled, cells, width=60
+                pnames[0], groups[pnames[0]], now, enabled, cells, width=60, detail=detail
             )
             right = _render_profile_block(
-                pnames[1], groups[pnames[1]], now, enabled, cells, width=60
+                pnames[1], groups[pnames[1]], now, enabled, cells, width=60, detail=detail
             )
             maxl = max(len(left), len(right))
             left += [" " * 60] * (maxl - len(left))
@@ -326,10 +351,17 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
                 out.append(lline + "   " + rline)
         else:
             for pn in sorted(pnames):
-                blk = _render_profile_block(pn, groups[pn], now, enabled, cells, width=66)
+                blk = _render_profile_block(
+                    pn, groups[pn], now, enabled, cells, width=66, detail=detail
+                )
                 out.extend(blk)
                 out.append("")
         return out
+
+    def compact_fill() -> list[str]:
+        if not groups:
+            return [c.dim("(no data)", enabled)]
+        return [_compact_profile_line(pn, groups[pn], now, enabled, cells) for pn in sorted(groups)]
 
     def activity_fill() -> list[str]:
         log = list(probe_log or [])[:3]
@@ -345,15 +377,54 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
         ts = time.strftime("%H:%M:%S")
         return [c.dim(f"sources: claude_code + grok  •  ctrl-c quit  •  {ts}", enabled)]
 
-    regions = [
-        Region("header", HEADER_H, header_fill),
-        Region("alert", ALERT_H, alert_fill),
-        Region("panels", panel_height(groups), panels_fill),
-        Region("activity", ACTIVITY_H, activity_fill),
-        Region("footer", FOOTER_H, footer_fill),
-    ]
-    sc = Scene(regions)
-    return sc.render(w)
+    # Height ladder: pick the richest level whose total height fits the terminal.
+    # size None (tests / non-interactive) => avail_h 0 => always FULL (unchanged).
+    #   full    header+alert+panels(3/row)+activity+footer   (the original layout)
+    #   meta    header+alert+panels(2/row)+footer            (drop provenance + activity)
+    #   heads   header+alert+panels(1/row)+footer            (key % rows only)
+    #   oneline header+alert+one compact line per profile    (no boxes)
+    #   tiny    header only (title + live summary chip)
+    def _regions_for(level: str) -> list["Region"]:
+        if level == "full":
+            return [
+                Region("header", HEADER_H, header_fill),
+                Region("alert", ALERT_H, alert_fill),
+                Region("panels", panel_height(groups, 2), lambda: panels_fill(2)),
+                Region("activity", ACTIVITY_H, activity_fill),
+                Region("footer", FOOTER_H, footer_fill),
+            ]
+        if level == "meta":
+            return [
+                Region("header", HEADER_H, header_fill),
+                Region("alert", ALERT_H, alert_fill),
+                Region("panels", panel_height(groups, 1), lambda: panels_fill(1)),
+                Region("footer", FOOTER_H, footer_fill),
+            ]
+        if level == "heads":
+            return [
+                Region("header", HEADER_H, header_fill),
+                Region("alert", ALERT_H, alert_fill),
+                Region("panels", panel_height(groups, 0), lambda: panels_fill(0)),
+                Region("footer", FOOTER_H, footer_fill),
+            ]
+        if level == "oneline":
+            clines = compact_fill()
+            return [
+                Region("header", HEADER_H, header_fill),
+                Region("alert", ALERT_H, alert_fill),
+                Region("compact", len(clines), lambda: clines),
+            ]
+        return [Region("header", HEADER_H, header_fill)]  # tiny
+
+    avail_h = int(getattr(size, "lines", 0) or 0) if size is not None else 0
+    for level in ("full", "meta", "heads", "oneline", "tiny"):
+        regs = _regions_for(level)
+        total = sum(r.height for r in regs)
+        if avail_h == 0 or total <= avail_h:
+            out = Scene(regs).render(w)
+            return out[:avail_h] if avail_h else out
+    # Even tiny overflows a tiny terminal: hard-truncate the header.
+    return Scene(_regions_for("tiny")).render(w)[: max(1, avail_h)]
 
 
 def render_frame_str(
@@ -438,9 +509,12 @@ def run(cfg):
                 # detect resets here (per plan: stays in run, feeds alert region for N ticks)
                 resets = detect_resets(last_fs, curr) if last_fs is not None else []
 
-                # render base (fixed height, blank alert); override alert line if resets present
+                # render base, adapting detail to the real terminal size (height ladder
+                # + true width). base[HEADER_H] is the alert line for every level that
+                # keeps the alert region (all but the header-only "tiny" level).
+                size = shutil.get_terminal_size((80, 24))
                 base = render_frame(
-                    curr, t, color=None, cells=cells, probe_log=probe_log, snapshot=snap
+                    curr, t, color=None, cells=cells, probe_log=probe_log, snapshot=snap, size=size
                 )
                 if resets:
                     names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))

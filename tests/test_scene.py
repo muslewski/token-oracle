@@ -1,5 +1,7 @@
 """Pure tests for the fixed-region scene primitives (plan 034)."""
 
+import os
+
 from token_oracle.core.contracts import Forecast
 from token_oracle.dashboard.app import (
     ACTIVITY_H,
@@ -7,6 +9,7 @@ from token_oracle.dashboard.app import (
     FOOTER_H,
     HEADER_H,
     panel_height,
+    render_frame,
     render_frame_str,
 )
 from token_oracle.dashboard.scene import Region, Scene, strip_ansi, visible_len
@@ -91,3 +94,36 @@ def test_height_invariance_same_config_shape():
     # also assert the declared region math matches (header+alert+panels+act+foot)
     expected = HEADER_H + ALERT_H + panel_height({"default": base_fs}) + ACTIVITY_H + FOOTER_H
     assert h_idle == expected
+
+
+def test_height_ladder_never_overflows_terminal():
+    """The dash must fit any terminal height — the whole point of the ladder."""
+    fs = [
+        Forecast("5h", 12000, 220000, 42.0, None, 3600.0, False, profile="claude"),
+        Forecast("weekly", 5000000, 8000000, 62.0, None, 400000.0, False, profile="claude"),
+        Forecast("weekly", 2000000, 100000000, 20.0, None, 400000.0, False, profile="grok"),
+    ]
+    for h in range(2, 45):
+        size = os.terminal_size((80, h))
+        frame = render_frame(fs, now=100000.0, color=False, size=size)
+        assert len(frame) <= h, f"height {h}: rendered {len(frame)} lines (overflow)"
+        # every line also fits the width
+        assert all(visible_len(ln) <= 80 for ln in frame)
+
+
+def test_height_ladder_tiny_is_header_only():
+    fs = [Forecast("weekly", 5000000, 8000000, 62.0, None, 400000.0, False, profile="claude")]
+    size = os.terminal_size((80, 3))
+    frame = render_frame(fs, now=100000.0, color=False, size=size)
+    assert len(frame) == HEADER_H  # title + summary chip only
+
+
+def test_size_none_is_full_layout_unchanged():
+    """size=None (tests / non-interactive) must keep the original FULL frame."""
+    fs = [
+        Forecast("5h", 12000, 220000, 42.0, None, 3600.0, False),
+        Forecast("weekly", 5000000, 8000000, 62.0, None, 400000.0, False),
+    ]
+    full = len(render_frame(fs, now=100000.0, color=False))
+    expected = HEADER_H + ALERT_H + panel_height({"default": fs}) + ACTIVITY_H + FOOTER_H
+    assert full == expected
