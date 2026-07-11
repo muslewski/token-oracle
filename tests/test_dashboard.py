@@ -1,6 +1,14 @@
 from token_oracle.core.contracts import Forecast
 from token_oracle.core.engine import detect_resets
-from token_oracle.dashboard.app import render_frame_str
+from token_oracle.dashboard.app import (
+    BAR_W,
+    _active_row_targets,
+    _bar,
+    _pulse_level,
+    render_frame_str,
+)
+from token_oracle.live.contract import STATE_OK
+from token_oracle.live.overlay import LiveCell
 
 
 def test_render_frame_lists_windows():
@@ -95,3 +103,52 @@ def test_render_frame_live_cell_shows_both_and_proj_and_honest_live_wording():
     # and head for fable uses ◌ (local)
     # at minimum the frame contains the non-live prov phrasing
     assert "local projection" in frame
+
+
+# --- row-change animation ---------------------------------------------------
+
+
+def test_bar_is_always_full_width_and_subcell():
+    from token_oracle.cli.colors import display_width
+
+    for p in (0.0, 10.3, 50.0, 65.4, 99.9, 100.0):
+        b = _bar(p, False, BAR_W)
+        assert display_width(b) == BAR_W
+    assert _bar(0.0, False, BAR_W).count("█") == 0
+    assert _bar(100.0, False, BAR_W).count("█") == BAR_W
+    # a fractional fill uses a sub-cell block glyph, not a whole extra cell
+    assert any(g in _bar(65.4, False, BAR_W) for g in "▏▎▍▌▋▊▉")
+
+
+def test_anim_pct_glides_bar_while_number_stays_truth():
+    fs = [Forecast("weekly", 1000, 10000, 20.0, None, 400000.0, False, profile="grok")]
+    cells = {("grok", "weekly"): LiveCell(pct=66.0, state=STATE_OK, age_secs=5.0, extractor="x")}
+    # bar mid-glide at 30% while the true value is 66%
+    frame = render_frame_str(
+        fs, now=0.0, color=False, cells=cells, anim_pct={("grok", "weekly"): 30.0}
+    )
+    row = next(line for line in frame.splitlines() if "weekly" in line)
+    assert "66%" in row  # number is the truth, not the animated value
+    low_fill = row.count("█")
+    # without the anim override the bar reflects the truth (66% -> more full cells)
+    frame2 = render_frame_str(fs, now=0.0, color=False, cells=cells)
+    row2 = next(line for line in frame2.splitlines() if "weekly" in line)
+    assert row2.count("█") > low_fill  # truth bar is fuller than the mid-glide bar
+
+
+def test_pulse_level_envelope():
+    assert _pulse_level(0.0, -1.0) == 0.0  # before start
+    assert _pulse_level(0.0, 0.0) == 1.0  # peak at start
+    assert _pulse_level(0.0, 5.0) == 0.0  # past the window
+    assert 0.0 <= _pulse_level(0.0, 1.0) <= 1.0
+
+
+def test_active_row_targets_blend():
+    fs = [
+        Forecast("5h", 2000, 10000, 15.0, None, 3600.0, False, profile="claude"),
+        Forecast("weekly", 100, 1000, 40.0, None, 400000.0, False, profile="claude"),
+    ]
+    cells = {("claude", "weekly"): LiveCell(pct=66.0, state=STATE_OK, age_secs=5.0, extractor="x")}
+    t = _active_row_targets(fs, cells)
+    assert t[("claude", "5h")] == 20.0  # local used/cap = 2000/10000
+    assert t[("claude", "weekly")] == 66.0  # web cell wins for the cap
