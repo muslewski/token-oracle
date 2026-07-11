@@ -3,6 +3,7 @@ refresh loop. Enhanced for multi-sub (Claude + Grok side-by-side), rich boxes,
 progress, and RESET alarm animations that people will remember."""
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -30,10 +31,22 @@ from .scene import Painter, Region, Scene
 BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
 
 
+_EIGHTHS = "▏▎▍▌▋▊▉"  # 1/8..7/8 left-fraction blocks; a full cell is █
+
+
 def _bar(pct, enabled, width=BAR_W):
+    """Gauge bar with sub-cell (1/8) resolution so animated fills glide smoothly
+    instead of jumping a whole cell at a time. Always exactly `width` cells."""
     pct = max(0.0, min(100.0, pct))
-    filled = max(0, min(width, int(round(pct / 100.0 * width))))
-    bar = "█" * filled + "░" * (width - filled)
+    total8 = int(round(pct / 100.0 * width * 8))
+    full = min(width, total8 // 8)
+    rem = total8 - full * 8
+    if full >= width:
+        bar = "█" * width
+    elif rem:
+        bar = "█" * full + _EIGHTHS[rem - 1] + "░" * (width - full - 1)
+    else:
+        bar = "█" * full + "░" * (width - full)
     return c.gauge(bar, pct, enabled)
 
 
@@ -127,12 +140,82 @@ def _row_glyph(cell, is_idle: bool) -> str:
     return "◌"
 
 
-def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66, detail=2):
+# --- row-change animation: smooth bar glide + a pulse on the changed row ------
+CHANGE_EPS = 0.4  # min target delta (pct points) that triggers a pulse
+SETTLE_EPS = 0.15  # snap displayed pct to target within this
+EASE = 0.28  # fraction of the remaining gap closed per animation frame
+PULSE_SECS = 2.4  # how long a row pulses after its value changes
+FAST_DT = 0.06  # frame interval while a bar is gliding / a row is pulsing
+IDLE_DT = 1.2  # frame interval when everything is settled
+
+
+def _pulse_level(start: float, now: float, dur: float = PULSE_SECS) -> float:
+    """Decaying 3-cycle shimmer 1->0 over `dur` seconds; 0 outside the window."""
+    e = now - start
+    if e < 0 or e >= dur:
+        return 0.0
+    phase = e / dur
+    env = 1.0 - phase
+    osc = 0.5 * (1.0 + math.cos(phase * 2.0 * math.pi * 3.0))
+    return max(0.0, min(1.0, env * osc))
+
+
+def _pulse_glyph(ch: str, level: float, enabled: bool) -> str:
+    """Emphasize a status glyph proportional to pulse level (bright at the peak)."""
+    if not enabled or level <= 0:
+        return ch
+    if level > 0.6:
+        return f"\033[1;97m{ch}\033[0m"  # bold bright white (peak)
+    if level > 0.25:
+        return f"\033[1;38;5;141m{ch}\033[0m"  # bold violet
+    return f"\033[38;5;141m{ch}\033[0m"  # violet
+
+
+def _row_akey(p_canon: str, f) -> tuple | None:
+    ww = (getattr(f, "window", "") or "").lower()
+    if "5h" in ww or "session" in ww or "current" in ww:
+        return (p_canon, "5h")
+    if ww in ("weekly", "week"):
+        return (p_canon, "weekly")
+    if ww == "fable":
+        return (p_canon, "fable")
+    return None
+
+
+def _active_row_targets(forecasts, cells) -> dict:
+    """Map (p_canon, wkey) -> current target pct for every active row, using the
+    same blend as the panel (5h from local logs, caps from web cell or proj)."""
+    cells = cells or {}
+    out: dict = {}
+    for f in forecasts or []:
+        if bool(getattr(f, "idle", False)):
+            continue
+        pn = getattr(f, "profile", "default")
+        p_canon = "grok" if "grok" in pn.lower() else "claude"
+        akey = _row_akey(p_canon, f)
+        if akey is None:
+            continue
+        if akey[1] == "5h":
+            tgt = (100.0 * f.used / f.cap) if getattr(f, "cap", 0) else 0.0
+        else:
+            cell = cells.get(akey)
+            tgt = cell.pct if (cell and cell.pct is not None) else f.projected_pct
+        out[akey] = float(tgt)
+    return out
+
+
+def _render_profile_block(
+    pname, forecasts, now, enabled, cells=None, width=66, detail=2, anim_pct=None, pulse=None
+):
     """Render a boxed panel. `detail` sets lines per window row (height ladder):
       2 = head + meta + provenance (full), 1 = head + meta, 0 = head only.
     Row count per window is constant for a given detail, preserving height
     invariance within a level. Glyphs: ● live, ◌ local projection, – idle.
     Meta/provenance distinguish live vs local; source wording names the truth.
+
+    anim_pct maps (p_canon, wkey) -> the currently-DISPLAYED bar pct (glides
+    toward the true value); the head NUMBER always shows the true value. pulse
+    maps (p_canon, wkey) -> 0..1 emphasis applied to the row glyph after a change.
     """
     per_row = detail + 1  # lines emitted per window row
     icon = _profile_icon(pname)
@@ -209,8 +292,16 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66, 
             row_src = "proj"
         row_live = row_src in ("local", "web")
 
+        # bar glides toward the true value (anim_pct); the number is always truth
+        akey = (p_canon, wkey) if wkey else None
+        bar_pct = display_pct
+        if anim_pct is not None and akey is not None and akey in anim_pct:
+            bar_pct = anim_pct[akey]
         glyph = "●" if row_live else "◌"
-        bar = _bar(display_pct, enabled, BAR_W)
+        plevel = pulse.get(akey, 0.0) if (pulse and akey) else 0.0
+        if plevel > 0:
+            glyph = _pulse_glyph(glyph, plevel, enabled)
+        bar = _bar(bar_pct, enabled, BAR_W)
         pct_num = f"{round(display_pct):3d}%"
         is_key = (wname.lower() in ("weekly", "fable")) and (
             ("grok" in pname.lower() and wname.lower() == "weekly")
@@ -264,7 +355,17 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66, 
     return lines
 
 
-def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None):
+def render_frame(
+    forecasts,
+    now,
+    color=None,
+    cells=None,
+    probe_log=None,
+    size=None,
+    snapshot=None,
+    anim_pct=None,
+    pulse=None,
+):
     """Fixed-region dashboard frame (plan 034).
 
     Layout is always exactly:
@@ -345,10 +446,26 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
         out: list[str] = []
         if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
             left = _render_profile_block(
-                pnames[0], groups[pnames[0]], now, enabled, cells, width=60, detail=detail
+                pnames[0],
+                groups[pnames[0]],
+                now,
+                enabled,
+                cells,
+                width=60,
+                detail=detail,
+                anim_pct=anim_pct,
+                pulse=pulse,
             )
             right = _render_profile_block(
-                pnames[1], groups[pnames[1]], now, enabled, cells, width=60, detail=detail
+                pnames[1],
+                groups[pnames[1]],
+                now,
+                enabled,
+                cells,
+                width=60,
+                detail=detail,
+                anim_pct=anim_pct,
+                pulse=pulse,
             )
             maxl = max(len(left), len(right))
             left += [" " * 60] * (maxl - len(left))
@@ -358,7 +475,15 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
         else:
             for pn in sorted(pnames):
                 blk = _render_profile_block(
-                    pn, groups[pn], now, enabled, cells, width=66, detail=detail
+                    pn,
+                    groups[pn],
+                    now,
+                    enabled,
+                    cells,
+                    width=66,
+                    detail=detail,
+                    anim_pct=anim_pct,
+                    pulse=pulse,
                 )
                 out.extend(blk)
                 out.append("")
@@ -434,7 +559,15 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
 
 
 def render_frame_str(
-    forecasts, now, color=None, cells=None, probe_log=None, size=None, snapshot=None
+    forecasts,
+    now,
+    color=None,
+    cells=None,
+    probe_log=None,
+    size=None,
+    snapshot=None,
+    anim_pct=None,
+    pulse=None,
 ):
     """Join wrapper for test convenience (old call sites expect str)."""
     return "\n".join(
@@ -446,6 +579,8 @@ def render_frame_str(
             probe_log=probe_log,
             size=size,
             snapshot=snapshot,
+            anim_pct=anim_pct,
+            pulse=pulse,
         )
     )
 
@@ -499,37 +634,95 @@ def run(cfg):
 
     # Wrap entire refresh loop in Painter (alt screen + cursor hidden; restores on any exit)
     with Painter() as painter:
+        # Animation state (persists across frames):
+        #   disp[k]        = currently displayed bar pct, glides toward the target
+        #   prev_target[k] = last target, to detect a change worth pulsing
+        #   pulse_start[k] = when row k last changed (drives the pulse envelope)
+        disp: dict = {}
+        prev_target: dict = {}
+        pulse_start: dict = {}
+        curr = None
+        cells: dict = {}
+        snap: dict = {}
+        last_data_t = 0.0
+        reset_msg = ""
+        reset_until = 0.0
         try:
             while True:
-                t = time.time()
-                curr = run_forecast(t, cfg)
+                now = time.time()
 
-                snap = load_snapshot() or {}
-                cells = overlay_cells(curr, snap, t)
+                # Refresh data at the normal cadence only — NOT on every animation
+                # frame — so log/snapshot scanning stays cheap while bars glide at ~16fps.
+                if curr is None or (now - last_data_t) >= IDLE_DT:
+                    curr = run_forecast(now, cfg)
+                    snap = load_snapshot() or {}
+                    cells = overlay_cells(curr, snap, now)
+                    resets = detect_resets(last_fs, curr) if last_fs is not None else []
+                    last_fs = curr
+                    last_data_t = now
+                    if resets:
+                        names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
+                        reset_msg = (
+                            f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
+                        )
+                        reset_until = now + 6.0
+
                 probe_log = list(last_probe_result.get("stderr_tail") or [])
 
-                # detect resets here (per plan: stays in run, feeds alert region for N ticks)
-                resets = detect_resets(last_fs, curr) if last_fs is not None else []
+                # --- ease displayed bars toward targets; pulse rows that changed ---
+                targets = _active_row_targets(curr, cells)
+                animating = False
+                for k, tgt in targets.items():
+                    if k not in disp:
+                        disp[k] = tgt  # snap on first sight (no gratuitous launch sweep)
+                        prev_target[k] = tgt
+                        continue
+                    if abs(tgt - prev_target.get(k, tgt)) >= CHANGE_EPS:
+                        pulse_start[k] = now
+                    prev_target[k] = tgt
+                    d = disp[k]
+                    if abs(tgt - d) < SETTLE_EPS:
+                        disp[k] = tgt
+                    else:
+                        disp[k] = d + (tgt - d) * EASE
+                        animating = True
+                for k in list(disp.keys()):  # forget rows that vanished
+                    if k not in targets:
+                        disp.pop(k, None)
+                        prev_target.pop(k, None)
+                        pulse_start.pop(k, None)
+                pulse: dict = {}
+                for k, st in list(pulse_start.items()):
+                    lv = _pulse_level(st, now)
+                    if lv > 0:
+                        pulse[k] = lv
+                        animating = True
+                    else:
+                        pulse_start.pop(k, None)
 
                 # render base, adapting detail to the real terminal size (height ladder
                 # + true width). base[HEADER_H] is the alert line for every level that
                 # keeps the alert region (all but the header-only "tiny" level).
                 size = shutil.get_terminal_size((80, 24))
                 base = render_frame(
-                    curr, t, color=None, cells=cells, probe_log=probe_log, snapshot=snap, size=size
+                    curr,
+                    now,
+                    color=None,
+                    cells=cells,
+                    probe_log=probe_log,
+                    snapshot=snap,
+                    size=size,
+                    anim_pct=disp,
+                    pulse=pulse,
                 )
-                if resets:
-                    names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
-                    banner = f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
-                    # alert line is at index HEADER_H (after 2 header lines); keep length
-                    if len(base) > HEADER_H:
-                        base[HEADER_H] = c.pulse(
-                            c.violet(banner, c.color_enabled()), c.color_enabled()
-                        )
+                if reset_msg and now < reset_until and len(base) > HEADER_H:
+                    base[HEADER_H] = c.pulse(
+                        c.violet(reset_msg, c.color_enabled()), c.color_enabled()
+                    )
+                    animating = True  # keep repainting so the reset banner pulses
 
                 painter.paint(base)
-                last_fs = curr
-                time.sleep(1.2)
+                time.sleep(FAST_DT if animating else IDLE_DT)
         except KeyboardInterrupt:
             # __exit__ of Painter runs on return (restores alt screen + cursor)
             return 0
