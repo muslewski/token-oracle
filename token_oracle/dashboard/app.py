@@ -108,7 +108,7 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
     if "grok" in pname.lower():
         title += "  SuperGrok Heavy"
     elif pname.lower() in ("claude", "default"):
-        title += "  Max20x + cloud"
+        title += "  Max 20×"
     lines = [c.violet(c.box_top(title, width, enabled), enabled)]
     if not forecasts:
         # (no data) block padded to exactly 3 lines for height invariance
