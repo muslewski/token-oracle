@@ -165,12 +165,22 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
                 lines.append(c.box_line(c.dim("   " + prov, enabled), width, enabled))
             continue
 
-        # active (or non-idle) row: display_pct prefers live cell.pct when present
-        if cell and cell.pct is not None:
+        # active row — pick the FRESHEST truthful source for THIS window (blend):
+        #   5h/session -> local logs (real-time, matches claude code); the web scrape
+        #     lags minutes and is deliberately NOT used for this fast-moving number.
+        #   weekly/fable/grok-weekly -> authoritative web cap when present, else local proj.
+        if is_5h:
+            display_pct = (100.0 * f.used / f.cap) if f.cap else 0.0
+            row_src = "local"
+        elif cell and cell.pct is not None:
             display_pct = cell.pct
+            row_src = "web"
         else:
             display_pct = f.projected_pct
+            row_src = "proj"
+        row_live = row_src in ("local", "web")
 
+        glyph = "●" if row_live else "◌"
         bar = _bar(display_pct, enabled, BAR_W)
         pct_num = f"{round(display_pct):3d}%"
         is_key = (wname.lower() in ("weekly", "fable")) and (
@@ -178,26 +188,27 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
             or (pname.lower() in ("claude", "default") and wname.lower() in ("weekly", "fable"))
         )
         pct_str = c.gauge(pct_num, display_pct, enabled)
-        if (is_key or wname.lower() in ("5h", "session")) and enabled:
+        if (is_key or is_5h) and enabled:
             pct_str = f"\033[1m{pct_str}\033[0m"
 
         reset_str = _fmt_reset_abs(f.reset_in_secs, now)
         head = f"{glyph} {wname:<6} {pct_str} {bar} {reset_str}"
         lines.append(c.box_line(head, width, enabled))
 
-        # meta: always local tokens; when live shown, also show the distinct local proj
+        # meta: local token counts; projection for live rows, ETA otherwise
         used_str = f"{fmt_tokens(f.used)}/{fmt_tokens(f.cap)}"
         meta = f"   {used_str}"
-        if cell and cell.pct is not None:
-            # live number shown in head; also surface the local projection explicitly
+        if row_live:
             proj_pct = round(f.projected_pct)
             meta += f"  proj {proj_pct}% end-of-window"
         elif f.eta_to_cap_secs is not None:
             meta += f"  ETA {fmt_dh_long(f.eta_to_cap_secs)}"
         lines.append(c.box_line(c.dim(meta, enabled), width, enabled))
 
-        # provenance: exactly the specified forms; "live" wording ONLY when cell.pct is not None
-        if cell and cell.pct is not None:
+        # provenance names the ACTUAL source of the head number
+        if row_src == "local":
+            prov = "local logs · live (this session)"
+        elif row_src == "web":
             age = int(cell.age_secs) if getattr(cell, "age_secs", None) is not None else 0
             ex = cell.extractor or ""
             domain = "claude.ai" if p_canon == "claude" else "grok.com"
@@ -247,6 +258,20 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
     else:
         w = 80
 
+    # Freshest glance number per provider = local 5h current-usage (real-time),
+    # so the header chip matches the panel's 5h head (not the slow web scrape).
+    local_5h_by: dict[str, float] = {}
+    for pn, fs in (groups or {}).items():
+        canon = "grok" if "grok" in pn.lower() else "claude"
+        for f in fs:
+            wn = (getattr(f, "window", "") or "").lower()
+            if (
+                ("5h" in wn or "session" in wn or "current" in wn)
+                and not getattr(f, "idle", False)
+                and getattr(f, "cap", 0)
+            ):
+                local_5h_by[canon] = 100.0 * f.used / f.cap
+
     def header_fill() -> list[str]:
         title = f"{c.M_ORACLE} token-oracle"
         # compact per-provider chips (inferred from cells; rate via rate_info when snapshot given)
@@ -260,8 +285,12 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
             live_c = next((cc for cc in cs if getattr(cc, "pct", None) is not None), None)
             stt = getattr(cs[0], "state", STATE_UNAVAILABLE) if cs else STATE_UNAVAILABLE
             if live_c is not None:
-                age = int(getattr(live_c, "age_secs", 0) or 0)
-                chips.append(f"{pc} ● live {int(live_c.pct)}% ({age}s)")
+                l5 = local_5h_by.get(pc)
+                if l5 is not None:
+                    chips.append(f"{pc} ● live {int(round(l5))}%")
+                else:
+                    age = int(getattr(live_c, "age_secs", 0) or 0)
+                    chips.append(f"{pc} ● live {int(live_c.pct)}% ({age}s)")
             elif stt == STATE_RATE_DATA_ONLY:
                 ri = rinfo.get(pc, {})
                 used = ri.get("used_pct")
@@ -354,7 +383,10 @@ def run(cfg):
     Full clear ONLY on resize (handled by Painter); in-place \033[K per line.
     """
     last_fs = None
-    LIVE_PROBE_INTERVAL = 60
+    # Web scrape only feeds the slow authoritative caps (weekly/fable/grok-weekly + reset);
+    # the fast 5h/session number comes from local logs every render tick, so we can scrape
+    # far less often (heavy Chromium relaunch each time).
+    LIVE_PROBE_INTERVAL = 240
 
     # Ring buffer for probe stderr (routed to activity region). Worker writes lists
     # but we normalize to deque for ring semantics.
