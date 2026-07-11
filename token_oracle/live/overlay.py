@@ -17,7 +17,12 @@ from .contract import (
     STATE_UNAVAILABLE,
 )
 
-FRESH_TTL_SECS = 180.0
+# Freshness window for applying a web reading. MUST exceed the dashboard's
+# LIVE_PROBE_INTERVAL plus one probe's duration, or cap cells go "stale" for the
+# tail of every probe cycle (worst-case reading age ≈ interval + probe time).
+# Web readings are all slow-moving caps now (the fast 5h number comes from local
+# logs), so a longer window is still truthful. See app.LIVE_PROBE_INTERVAL.
+FRESH_TTL_SECS = 600.0
 
 
 @dataclass(frozen=True)

@@ -198,3 +198,46 @@ def test_engine_purity_no_live_fetcher_leaked():
 
     assert not hasattr(e, "fetch_claude_live_usage")
     assert not hasattr(e, "fetch_grok_live_usage")
+
+
+def test_freshness_ttl_exceeds_probe_interval_with_margin():
+    """Regression: the dash scrapes every LIVE_PROBE_INTERVAL, but a reading's
+    worst-case age is interval + one probe's duration. FRESH_TTL_SECS must cover
+    that, or cap cells flicker to 'stale' at the tail of every probe cycle."""
+    from token_oracle.dashboard.app import LIVE_PROBE_INTERVAL
+
+    probe_duration_margin = 60  # a headed both-provider probe takes tens of seconds
+    assert FRESH_TTL_SECS >= LIVE_PROBE_INTERVAL + probe_duration_margin
+
+
+def test_reading_at_full_probe_interval_still_applied():
+    """A cap reading as old as one whole probe interval must still be live."""
+    from token_oracle.dashboard.app import LIVE_PROBE_INTERVAL
+
+    now = time.time()
+    snap = {
+        "version": 1,
+        "written_at": now,
+        "providers": {
+            "grok": {
+                "provider": "grok",
+                "state": "ok",
+                "readings": [
+                    {
+                        "provider": "grok",
+                        "metric": METRIC_WEEKLY_PCT,
+                        "value": 23.0,
+                        "confidence": CONF_HIGH,
+                        "extractor": "grok.usage_modal.text",
+                        "evidence": "Weekly SuperGrok Heavy Limit 23% used",
+                        "fetched_at": now - LIVE_PROBE_INTERVAL,
+                    }
+                ],
+            }
+        },
+    }
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="grok")]
+    cell = overlay_cells(fs, snap, now).get(("grok", "weekly"))
+    assert cell is not None
+    assert cell.pct == 23.0  # not withheld
+    assert cell.state != STATE_STALE
