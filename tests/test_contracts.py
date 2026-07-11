@@ -13,6 +13,7 @@ def test_forecast_confidence_default():
     assert f.confidence == 1.0
     assert f.profile == "default"
 
+
 def test_forecast_profile_tag():
     f = Forecast("weekly", 100, 1000, 10.0, None, 100.0, False, profile="grok")
     assert f.profile == "grok"

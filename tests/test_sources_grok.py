@@ -1,6 +1,5 @@
 import json
 import os
-import time
 
 from token_oracle.sources.base import available, get_source
 
@@ -90,7 +89,9 @@ def test_grok_prunes_gone_and_old(tmp_path):
 
 
 def _signals_obj(tokens):
-    return json.dumps({"contextTokensUsed": tokens, "contextWindowTokens": 512000, "modelsUsed": ["grok-build"]})
+    return json.dumps(
+        {"contextTokensUsed": tokens, "contextWindowTokens": 512000, "modelsUsed": ["grok-build"]}
+    )
 
 
 def test_grok_reads_live_from_signals(tmp_path):

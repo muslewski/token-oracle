@@ -2,7 +2,7 @@ import json
 
 from token_oracle.core.config import Config
 from token_oracle.core.contracts import Forecast, Window
-from token_oracle.core.engine import forecast, multi_forecast, detect_resets
+from token_oracle.core.engine import detect_resets, forecast, multi_forecast
 
 
 def test_forecast_over_generic_source(tmp_path):
@@ -123,16 +123,24 @@ def test_forecast_multi_profiles(tmp_path):
     feed1 = tmp_path / "c.json"
     feed2 = tmp_path / "g.json"
     now = 100000.0
-    feed1.write_text(json.dumps([[now-100, 100]]))
-    feed2.write_text(json.dumps([[now-50, 200]]))
+    feed1.write_text(json.dumps([[now - 100, 100]]))
+    feed2.write_text(json.dumps([[now - 50, 200]]))
     cfg = Config(
         source="generic",
         cache_path=str(tmp_path / "c.json"),
         windows=[Window("wk", 1000, 604800)],
         profiles={
-            "claude": {"source": "generic", "source_opts": {"events_path": str(feed1)}, "windows": [{"name": "5h", "cap": 1000, "period_secs": 18000}] },
-            "grok": {"source": "generic", "source_opts": {"events_path": str(feed2)}, "windows": [{"name": "weekly", "cap": 10000, "period_secs": 604800}] },
-        }
+            "claude": {
+                "source": "generic",
+                "source_opts": {"events_path": str(feed1)},
+                "windows": [{"name": "5h", "cap": 1000, "period_secs": 18000}],
+            },
+            "grok": {
+                "source": "generic",
+                "source_opts": {"events_path": str(feed2)},
+                "windows": [{"name": "weekly", "cap": 10000, "period_secs": 604800}],
+            },
+        },
     )
     out = forecast(now, cfg)
     assert len(out) == 2
@@ -146,9 +154,17 @@ def test_forecast_multi_profiles(tmp_path):
 def test_multi_forecast_and_detect(tmp_path):
     feed = tmp_path / "f.json"
     now = 100000.0
-    feed.write_text(json.dumps([[now-10, 10]]))
-    cfg = Config(source="generic", source_opts={"events_path": str(feed)}, cache_path=str(tmp_path/"c"), windows=[Window("w",100,100)])
+    feed.write_text(json.dumps([[now - 10, 10]]))
+    cfg = Config(
+        source="generic",
+        source_opts={"events_path": str(feed)},
+        cache_path=str(tmp_path / "c"),
+        windows=[Window("w", 100, 100)],
+    )
     mf = multi_forecast(now, cfg)
     assert "generic" in mf or "default" in mf
-    rs = detect_resets([Forecast("w", 90, 100, 90, None, 10, False)], [Forecast("w", 5, 100, 5, None, 10, False, profile="grok")])
+    rs = detect_resets(
+        [Forecast("w", 90, 100, 90, None, 10, False)],
+        [Forecast("w", 5, 100, 5, None, 10, False, profile="grok")],
+    )
     assert len(rs) >= 1

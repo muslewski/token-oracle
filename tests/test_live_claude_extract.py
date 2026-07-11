@@ -75,7 +75,13 @@ def test_distinctness_drops_model_when_same_row_evidence():
     from token_oracle.live.contract import LiveReading
 
     w = LiveReading(
-        "claude", METRIC_WEEKLY_PCT, 38.0, CONF_HIGH, "claude.usage_row.aria", "All models | 38%", now
+        "claude",
+        METRIC_WEEKLY_PCT,
+        38.0,
+        CONF_HIGH,
+        "claude.usage_row.aria",
+        "All models | 38%",
+        now,
     )
     m = LiveReading(
         "claude",
@@ -207,7 +213,10 @@ def test_is_bot_challenge_detects_cf_interstitial_and_ignores_normal_pages():
     assert is_bot_challenge("JUST A MOMENT", "bar") is True
     assert is_bot_challenge("title", "Performing security verification please wait") is True
     assert is_bot_challenge("", "This security service to protect against... Cloudflare") is True
-    assert is_bot_challenge("Just a moment... | Cloudflare", "Performance and Security by Cloudflare") is True
+    assert (
+        is_bot_challenge("Just a moment... | Cloudflare", "Performance and Security by Cloudflare")
+        is True
+    )
 
     # normal pages
     assert is_bot_challenge("Claude | Settings", "Usage 38% weekly") is False

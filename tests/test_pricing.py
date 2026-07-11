@@ -24,7 +24,9 @@ def test_resolve_longest_prefix_wins():
 
 
 def test_resolve_overrides_win_over_snapshot():
-    overrides = {"claude-opus-4": {"input": 1.0, "output": 2.0, "cache_write": 0.0, "cache_read": 0.0}}
+    overrides = {
+        "claude-opus-4": {"input": 1.0, "output": 2.0, "cache_write": 0.0, "cache_read": 0.0}
+    }
     prices = P.resolve("claude-opus-4-20250101", overrides=overrides)
     assert prices["input"] == 1.0
     assert prices["output"] == 2.0
