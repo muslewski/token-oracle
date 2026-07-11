@@ -6,8 +6,11 @@ oracle.core never imports this."""
 import os
 import re
 import sys
+import unicodedata
 
 _ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mK]")
+# Zero-width code points that occupy no terminal cell (ZWSP, ZWNJ, ZWJ, BOM).
+_ZERO_WIDTH = frozenset("\u200b\u200c\u200d\ufeff")
 
 RESET = "\033[0m"
 
@@ -89,9 +92,10 @@ def ok_badge(good, enabled):
     )
 
 
-# Dashboard extras
-M_CLAUDE = "🧠"
-M_GROK = "⚡"
+# Dashboard extras. Panel icons are width-1 glyphs (✳/✦) so box borders align on
+# every terminal — emoji render as 1 or 2 cells unpredictably across terminals.
+M_CLAUDE = "✳"
+M_GROK = "✦"
 M_RESET = "🔄"
 M_HEAVY = "💪"
 
@@ -109,14 +113,32 @@ def pulse(text, enabled, period=1.5, now=None):
     return dim(text, enabled)
 
 
+def _char_cells(ch: str) -> int:
+    """Terminal cell width of a single character: 0 for combining/zero-width,
+    2 for East-Asian Wide/Fullwidth (incl. most emoji, e.g. 🧠 ⚡), else 1.
+    Ambiguous (box-drawing, ●, ×, …) counts as 1, matching modern terminals."""
+    if ch in _ZERO_WIDTH or unicodedata.combining(ch):
+        return 0
+    if "\ufe00" <= ch <= "\ufe0f":  # variation selectors
+        return 0
+    return 2 if unicodedata.east_asian_width(ch) in ("W", "F") else 1
+
+
+def display_width(s: str) -> int:
+    """Number of terminal cells s occupies, ignoring ANSI SGR escapes. Unlike a
+    raw char count this accounts for wide glyphs (emoji/CJK = 2 cells) so box
+    borders stay aligned regardless of the content."""
+    return sum(_char_cells(c) for c in _ANSI_RE.sub("", s or ""))
+
+
 def visible_len(s: str) -> int:
-    """Length ignoring ANSI SGR escapes (for box width decisions on colored text)."""
-    return len(_ANSI_RE.sub("", s or ""))
+    """Deprecated alias — use display_width. Kept for callers; now width-aware."""
+    return display_width(s)
 
 
 def box_top(title, width=40, enabled=True):
     t = f" {title} " if title else ""
-    bar = "─" * max(0, width - 2 - visible_len(t))
+    bar = "─" * max(0, width - 2 - display_width(t))
     return f"┌{t}{bar}┐"
 
 
@@ -125,12 +147,18 @@ def box_bot(width=40, enabled=True):
 
 
 def box_line(text, width=40, enabled=True):
-    # pad or truncate using *visible* width so colored %/bars don't get mangled
+    # pad or truncate using *display* width so wide glyphs / colored bars align
     inner_w = width - 2
-    vlen = visible_len(text)
-    if vlen > inner_w:
-        # truncate the logical text; keep leading escapes if any by stripping after cut is risky,
-        # so cut raw then re-trim visible. Simple safe: cut raw conservatively then append …
-        text = text[: inner_w - 1] + "…"
-    pad = " " * (inner_w - visible_len(text))
+    if display_width(text) > inner_w:
+        # trim character-by-character until it fits the cell budget (leaving 1 for …)
+        cut = ""
+        used = 0
+        for ch in _ANSI_RE.sub("", text):
+            w = _char_cells(ch)
+            if used + w > inner_w - 1:
+                break
+            cut += ch
+            used += w
+        text = cut + "…"
+    pad = " " * (inner_w - display_width(text))
     return f"│{text}{pad}│"
