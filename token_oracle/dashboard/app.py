@@ -316,12 +316,12 @@ def render_frame(forecasts, now, color=None, cells=None, probe_log=None, size=No
             live_c = next((cc for cc in cs if getattr(cc, "pct", None) is not None), None)
             stt = getattr(cs[0], "state", STATE_UNAVAILABLE) if cs else STATE_UNAVAILABLE
             if live_c is not None:
+                # glance chip stays clean + symmetric across providers: no age here
+                # (precise per-row age lives in the panel provenance). Prefer the
+                # local 5h number when the provider has one, else the web cap.
                 l5 = local_5h_by.get(pc)
-                if l5 is not None:
-                    chips.append(f"{pc} ● live {int(round(l5))}%")
-                else:
-                    age = int(getattr(live_c, "age_secs", 0) or 0)
-                    chips.append(f"{pc} ● live {int(live_c.pct)}% ({age}s)")
+                pct = int(round(l5)) if l5 is not None else int(live_c.pct)
+                chips.append(f"{pc} ● live {pct}%")
             elif stt == STATE_RATE_DATA_ONLY:
                 ri = rinfo.get(pc, {})
                 used = ri.get("used_pct")
