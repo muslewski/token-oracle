@@ -200,7 +200,8 @@ def _render_profile_block(pname, forecasts, now, enabled, cells=None, width=66):
         if cell and cell.pct is not None:
             age = int(cell.age_secs) if getattr(cell, "age_secs", None) is not None else 0
             ex = cell.extractor or ""
-            base = f"live {p_canon}.ai"
+            domain = "claude.ai" if p_canon == "claude" else "grok.com"
+            base = f"live {domain}"
             if ex:
                 base += f" · {ex}"
             prov = f"{base} · {age}s ago" if age else base
