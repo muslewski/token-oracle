@@ -58,6 +58,12 @@ ALERT_H = 1
 ACTIVITY_H = 3
 FOOTER_H = 1
 
+# Seconds between web scrapes (heavy Chromium relaunch). Only feeds the slow
+# authoritative caps; the fast 5h number comes from local logs every tick, so
+# this can be long. MUST stay well below overlay.FRESH_TTL_SECS (+ probe time)
+# or cap cells go "stale" between probes. Guarded by a test.
+LIVE_PROBE_INTERVAL = 240
+
 
 def _panel_block_height(n_windows: int, detail: int = 2) -> int:
     """Top + bottom + (detail+1) lines per window row."""
@@ -454,10 +460,6 @@ def run(cfg):
     Full clear ONLY on resize (handled by Painter); in-place \033[K per line.
     """
     last_fs = None
-    # Web scrape only feeds the slow authoritative caps (weekly/fable/grok-weekly + reset);
-    # the fast 5h/session number comes from local logs every render tick, so we can scrape
-    # far less often (heavy Chromium relaunch each time).
-    LIVE_PROBE_INTERVAL = 240
 
     # Ring buffer for probe stderr (routed to activity region). Worker writes lists
     # but we normalize to deque for ring semantics.
