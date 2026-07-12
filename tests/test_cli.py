@@ -1,5 +1,8 @@
 import json
 import os
+import signal
+import subprocess
+import sys
 import time as _time
 from types import SimpleNamespace
 
@@ -448,3 +451,26 @@ def test_forecast_no_data_json_unaffected(monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "no usage data yet" not in out  # json path never shows the hint
+
+
+# --- plan 044: SIGPIPE reset + subprocess no-traceback smoke ---
+
+
+@pytest.mark.skipif(not hasattr(signal, "SIGPIPE"), reason="no SIGPIPE on this platform")
+def test_reset_sigpipe_restores_default():
+    # start from Python's default-changed state, then assert our reset wins
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    cli_main._reset_sigpipe()
+    assert signal.getsignal(signal.SIGPIPE) == signal.SIG_DFL
+
+
+def test_forecast_subprocess_no_brokenpipe_noise():
+    p = subprocess.run(  # noqa: UP022
+        [sys.executable, "-m", "token_oracle.cli.main", "forecast", "--now", "1000"],
+        env={**os.environ, "TOKEN_ORACLE_SKIP_BOOTSTRAP": "1"},
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=os.getcwd(),
+    )
+    assert b"BrokenPipeError" not in p.stderr
+    assert b"Traceback" not in p.stderr

@@ -47,6 +47,20 @@ def _now(args):
     return args.now if args.now is not None else time.time()
 
 
+def _reset_sigpipe():
+    """Restore default SIGPIPE so `oracle ... | head` dies quietly like a normal
+    Unix filter, instead of raising BrokenPipeError + a shutdown traceback.
+
+    No-op on platforms without SIGPIPE (Windows) or when not on the main thread.
+    """
+    try:
+        import signal
+
+        signal.signal(signal.SIGPIPE, signal.SIG_DFL)
+    except (ImportError, AttributeError, ValueError):
+        pass
+
+
 def _is_interactive():
     """True when stdout is an interactive terminal (not a pipe / file / capture).
 
@@ -284,6 +298,7 @@ def _doctor_lines(cfg, config_path, color, now):
 
 
 def main(argv=None):
+    _reset_sigpipe()
     parser = argparse.ArgumentParser(
         prog="token-oracle",
         description=(
