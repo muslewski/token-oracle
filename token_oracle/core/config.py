@@ -291,6 +291,76 @@ def _window_from_dict(d) -> Window:
     return Window(name=name, cap=cap, period_secs=period, anchor=anchor, model=model)
 
 
+# Bands for accepting an external cap relative to the shipped preset cap.
+_CAP_BAND_LOW = 0.2
+_CAP_BAND_HIGH = 5.0
+
+
+def _preset_caps(plan: str) -> tuple[int | None, int | None]:
+    """(five_hour_cap, weekly_cap) from the shipped preset for `plan` (max20 fallback)."""
+    pdef = PRESETS.get(plan) or PRESETS.get("max20") or {}
+    five = wk = None
+    for w in pdef.get("windows", []):
+        if not isinstance(w, dict):
+            continue
+        nm = str(w.get("name", "")).lower()
+        cap = w.get("cap")
+        if not isinstance(cap, (int, float)):
+            continue
+        if nm in ("5h", "5-hour", "session", "current"):
+            five = int(cap)
+        elif nm in ("weekly", "week", "fable"):
+            wk = int(cap)
+    return five, wk
+
+
+def _validate_external_caps(raw_five, raw_wk, preset_five, preset_wk):
+    """Reject semantically-impossible external caps. Returns
+    (five_or_None, wk_or_None, issues). None means 'rejected — use the preset'."""
+    issues: list[str] = []
+
+    def _check(ext, preset, label):
+        if ext is None:
+            return None  # nothing supplied -> preset (no issue)
+        if not isinstance(ext, (int, float)) or isinstance(ext, bool):
+            issues.append(f"external {label} {ext!r} rejected (not a number) — keeping preset")
+            return None
+        try:
+            extf = float(ext)
+        except (TypeError, ValueError):
+            issues.append(f"external {label} {ext!r} rejected (not a number) — keeping preset")
+            return None
+        if not (extf > 0) or extf != extf or extf in (float("inf"), float("-inf")):
+            issues.append(f"external {label} {ext} rejected (non-positive/non-finite) — keeping preset")
+            return None
+        if preset and preset > 0:
+            ratio = extf / preset
+            if ratio < _CAP_BAND_LOW or ratio > _CAP_BAND_HIGH:
+                issues.append(
+                    f"external {label} {int(extf)} rejected "
+                    f"({ratio:.0f}x the preset {int(preset)}, implausible) — keeping preset"
+                )
+                return None
+        return int(extf)
+
+    five = _check(raw_five, preset_five, "fiveHourCap")
+    wk = _check(raw_wk, preset_wk, "weeklyCap")
+
+    # Cross-window invariant: a 5h cap cannot be >= the weekly cap.
+    eff_five = five if five is not None else preset_five
+    eff_wk = wk if wk is not None else preset_wk
+    if eff_five is not None and eff_wk is not None and eff_five >= eff_wk:
+        # Only complain if the *external* 5h value is the culprit (don't fault a clean preset).
+        if five is not None:
+            issues.append(
+                f"external fiveHourCap {int(five)} rejected "
+                f"(>= weekly cap {int(eff_wk)}, impossible) — keeping preset"
+            )
+        five = None
+
+    return five, wk, issues
+
+
 def load_config(path: str | None = None) -> "Config":
     path = path or default_config_path()
     issues: list[str] = []
