@@ -136,6 +136,27 @@ dash header shows `grok ● live 23%`, grok panel weekly row live. Gates: 219 pa
 (+8), ruff/format/mypy clean. Also fixed the dash provenance domain (`grok.ai`→`grok.com`).
 Supersedes the RC-B "not planned / rate_data_only is truthful" disposition below.
 
+**Extended 2026-07-12 at `646a2ac`** with plans 039–041: the **Phase-0 truthfulness
+gate**, opened after a 10-agent objective audit (5 Claude + 5 Grok, cross-triangulated)
+toward the operator's 10k-star goal concluded *fix truth → make visible → make spread*, and
+the operator authorized executing the roadmap. These three are the confirmed, hand-verified
+P0 truthfulness bugs that must land before any launch — a viral thread today would
+screenshot a wrong number. All three touch **disjoint files** (config.py / grok_extract.py /
+sources+engine), so they dispatch as **three parallel grok-xhigh executors**. Round order:
+**039 ∥ 040 ∥ 041** (independent). Audit deliverable + rationale in memory
+`audit-2026-07-12-state-and-roadmap`.
+
+- **039** — cap-deflation: `~/.claude/usage-limits.json` caps (`57M`/`270M`) are applied over
+  the correct preset with zero validation; the 5h cap even exceeds the weekly cap
+  (impossible). Weekly % comes out ~34× too small. Fix = invariant-based validation, reject +
+  fall back to preset + record an issue.
+- **040** — grok fabrication hole: any `{used, limit}` JSON the page loads becomes a
+  `CONF_HIGH` weekly %. Plan 038 proved grok has no such endpoint, so it can only
+  false-positive. Fix = remove the generic-pair extractor (keep key-anchored exact keys).
+- **041** — one malformed JSONL line crashes the scan and blanks the forecast (engine single
+  path lacks the multi path's guard; source iterators assume every line is a dict). Fix =
+  type-guard the iterators + mirror the cached-events fallback.
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
@@ -183,6 +204,10 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 036 | `oracle live on/off/status` — persistent real-data toggle + Xvfb guidance | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/036 (7 commits), merged to main at `3611055`. Gates re-run by advisor: 208 passed (+7), ruff/format/mypy clean on its files. **Behavioral**: `live status`→OFF + display/Xvfb lines + last states; `live on`→writes `{"live":{"headed":true}}`, `headed_enabled()` True, shows "Run oracle dash" (Xvfb present, no warning); `live off`→False. `app.py` untouched (Step 4 correctly concluded dash inherits headed via the default config the spawned live-probe loads). |
 | 037 | Claude Fable weekly row separated from All-models (high-conf `model_weekly_pct`) | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/037 (3 commits), merged to main at `98f364c`. Gates re-run by advisor: 211 passed (+3), ruff/format/mypy clean on its files (the 2 E501 in test_live_claude_extract.py:78,210 are pre-existing, confirmed on base). **LIVE PROOF (headed probe against the worktree)**: claude `ok`, `weekly_pct=60` (All models, HIGH) + `model_weekly_pct=99 model=fable` (HIGH) — clean per-meter evidence, no "Fabl" bleed. **Full overlay E2E on main**: `(claude,fable)` cell = 99.0 live, `(claude,weekly)`=60.0, `(claude,5h)`=26.0 — all high-conf applied. |
 | 038 | Grok live weekly usage via `?_s=usage` modal (corrects wrong RC-B "no page") | P1 | S | 035, 037 | DONE — implemented **directly by advisor** 2026-07-11 on advisor/038 (operator chose direct over executor). Root cause was the wrong route (`settings/usage` bounces); real surface is the `?_s=usage` modal (plain-text %s, no aria/JSON). Repointed `fetch_grok_live_usage` + added text-anchored `readings_from_usage_modal` + `parse_absolute_reset` + overlay `grok_build` cell + dash domain fix. **LIVE PROOF (headed Xvfb)**: grok `state=ok`, `weekly_pct=23.0` HIGH, `model_weekly_pct=22.0 grok_build` HIGH, `reset_at`=Jul 17 2026; dash header `grok ● live 23%`, panel weekly row live. Gates: 219 passed (+8), ruff/format/mypy clean. |
+
+| 039 | Validate external Claude caps — reject impossible values (cap deflation) | P0 | S-M | 001, 017 | TODO |
+| 040 | Close grok `used+limit` fabrication hole (generic shape → HIGH weekly %) | P0 | S | 031, 038 | TODO |
+| 041 | Malformed JSONL line must never blank the forecast (iter guards + engine fallback) | P0 | S-M | 005, 016 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
