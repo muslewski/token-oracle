@@ -378,3 +378,33 @@ def test_live_probe_honors_config_headed(tmp_path, monkeypatch):
     rc = main(["live-probe", "--json", "--config", cfg_path])
     assert len(calls) == 1
     assert calls[0].get("headless") is True
+
+
+# --- plan 042: real help text (descriptions, examples, per-arg help) ---
+
+
+def test_top_help_lists_all_subcommands_with_descriptions(capsys):
+    with pytest.raises(SystemExit) as ei:
+        main(["--help"])
+    assert ei.value.code == 0
+    out = capsys.readouterr().out
+    assert "forecast" in out
+    assert "time left before your cap" in out
+    assert "examples:" in out
+
+
+def test_subcommand_help_has_description(capsys):
+    with pytest.raises(SystemExit) as ei:
+        main(["dash", "--help"])
+    assert ei.value.code == 0
+    out = capsys.readouterr().out
+    assert "full-screen live dashboard" in out
+
+
+def test_now_flag_is_hidden(capsys):
+    with pytest.raises(SystemExit) as ei:
+        main(["forecast", "--help"])
+    assert ei.value.code == 0
+    out = capsys.readouterr().out
+    assert "--now" not in out
+    assert "--json" in out

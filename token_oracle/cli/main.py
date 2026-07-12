@@ -19,9 +19,27 @@ from ..core.timeutil import fmt_dur
 from ..snapshot.writer import build_snapshot, default_snapshot_path, write_snapshot
 from ..sources.base import available, get_source
 
+_CMD_HELP = {
+    "forecast": "print a compact usage forecast (time left before your cap)",
+    "snapshot": "write the current forecast to a JSON snapshot file",
+    "statusline": "print a one-line status for shell prompts / status bars",
+    "tmux": "print a tmux-formatted status string",
+    "doctor": "check config, data sources, cache, and live status",
+    "dash": "full-screen live dashboard (Ctrl-C to quit)",
+    "init": "write a starter config file",
+    "clean": "remove token-oracle's config, cache, and snapshot files",
+    "live": "turn real (browser-verified) live data on / off (or show status)",
+    "live-setup": "one-time browser login to grok.com / claude.ai for live data",
+    "live-probe": "run the live web probe now and print what it found",
+}
+
 
 def _add_common(p):
-    p.add_argument("--config", default=None)
+    p.add_argument(
+        "--config",
+        default=None,
+        help="path to config file (default: ~/.config/token-oracle/config.json)",
+    )
     p.add_argument("--now", type=float, default=None, help=argparse.SUPPRESS)
 
 
@@ -238,8 +256,26 @@ def _doctor_lines(cfg, config_path, color, now):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="token-oracle")
-    sub = parser.add_subparsers(dest="cmd", required=True)
+    parser = argparse.ArgumentParser(
+        prog="token-oracle",
+        description=(
+            "token-oracle — forecast when you'll hit your Claude Code / Grok "
+            "token limits, computed offline from local agent logs (with optional "
+            "browser-verified live numbers)."
+        ),
+        epilog=(
+            "examples:\n"
+            "  token-oracle forecast          time left before your next cap\n"
+            "  token-oracle dash              full-screen live dashboard (Ctrl-C to quit)\n"
+            "  token-oracle doctor            check config, data sources, and live status\n"
+            "  token-oracle init              write a starter config file\n"
+            "  token-oracle live on           turn on real, browser-verified numbers\n"
+            "\n"
+            "docs: https://github.com/muslewski/token-oracle"
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    sub = parser.add_subparsers(dest="cmd", required=True, metavar="<command>")
     for name in (
         "forecast",
         "snapshot",
@@ -253,22 +289,60 @@ def main(argv=None):
         "live-setup",
         "live-probe",
     ):
-        sp = sub.add_parser(name)
+        sp = sub.add_parser(
+            name,
+            help=_CMD_HELP[name],
+            description=_CMD_HELP[name],
+        )
         _add_common(sp)
         if name == "forecast":
-            sp.add_argument("--json", action="store_true")
+            sp.add_argument(
+                "--json",
+                action="store_true",
+                help="emit machine-readable JSON instead of text",
+            )
         if name == "snapshot":
-            sp.add_argument("--out", default=None)
+            sp.add_argument(
+                "--out",
+                default=None,
+                help="output path (default: the standard snapshot location)",
+            )
         if name == "init":
-            sp.add_argument("--preset", default="max20", choices=sorted(PRESETS))
-            sp.add_argument("--force", action="store_true")
+            sp.add_argument(
+                "--preset",
+                default="max20",
+                choices=sorted(PRESETS),
+                help="plan preset for the new config (default: max20)",
+            )
+            sp.add_argument(
+                "--force",
+                action="store_true",
+                help="overwrite an existing config file",
+            )
         if name == "clean":
-            sp.add_argument("--yes", action="store_true")
+            sp.add_argument(
+                "--yes",
+                action="store_true",
+                help="actually delete (without this, only prints what would be removed)",
+            )
         if name == "live":
-            sp.add_argument("action", choices=["on", "off", "status"])
+            sp.add_argument(
+                "action",
+                choices=["on", "off", "status"],
+                help="on | off | status",
+            )
         if name == "live-probe":
-            sp.add_argument("--provider", choices=["grok", "claude", "all"], default="all")
-            sp.add_argument("--json", action="store_true")
+            sp.add_argument(
+                "--provider",
+                choices=["grok", "claude", "all"],
+                default="all",
+                help="which provider(s) to probe (default: all)",
+            )
+            sp.add_argument(
+                "--json",
+                action="store_true",
+                help="emit machine-readable JSON instead of text",
+            )
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
     now = _now(args)
