@@ -32,7 +32,11 @@ def iter_total_tokens_reports(jsonl_path):
                     obj = json.loads(raw)
                 except (ValueError, TypeError):
                     continue
-                meta = (obj.get("params") or {}).get("_meta") or {}
+                if not isinstance(obj, dict):
+                    continue
+                params = obj.get("params")
+                meta = params.get("_meta") if isinstance(params, dict) else None
+                meta = meta if isinstance(meta, dict) else {}
                 tot = meta.get("totalTokens")
                 ts = obj.get("timestamp")
                 if ts is not None and isinstance(tot, (int, float)) and tot >= 0:

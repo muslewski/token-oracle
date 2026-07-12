@@ -2,6 +2,7 @@ import json
 import os
 
 from token_oracle.sources.base import available, get_source
+from token_oracle.sources.grok import iter_total_tokens_reports
 
 
 def _update_line(ts, total_tokens, update_type="AgentThoughtChunk"):
@@ -111,3 +112,21 @@ def test_grok_reads_live_from_signals(tmp_path):
     totals = [e[1] for e in events]
     assert 100 in totals
     assert any(d == 150 for d in totals)
+
+
+def test_grok_iter_skips_malformed_lines(tmp_path):
+    p = tmp_path / "updates.jsonl"
+    p.write_text(
+        "\n".join(
+            [
+                "42",  # non-dict JSON
+                '["a","b"]',  # non-dict JSON
+                json.dumps({"params": "not-a-dict", "timestamp": 1000.0}),
+                json.dumps(
+                    {"params": {"_meta": {"totalTokens": 500}}, "timestamp": 1000.0}
+                ),  # good
+            ]
+        )
+    )
+    reports = list(iter_total_tokens_reports(str(p)))
+    assert reports == [(1000.0, 500)]
