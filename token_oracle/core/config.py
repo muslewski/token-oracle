@@ -407,8 +407,11 @@ def load_config(path: str | None = None) -> "Config":
     # - weeklyResetAnchor -> set on weekly/fable windows (fixed grid, exact server reset)
     # Only for claude-sourced profiles/top-level; user config values for other fields preserved.
     claude_limits = load_claude_limits()
-    five_cap = claude_limits.get("fiveHourCap")
-    wk_cap = claude_limits.get("weeklyCap")
+    _pf, _pw = _preset_caps(plan)
+    five_cap, wk_cap, _cap_issues = _validate_external_caps(
+        claude_limits.get("fiveHourCap"), claude_limits.get("weeklyCap"), _pf, _pw
+    )
+    issues.extend(_cap_issues)
     wk_anchor_str = claude_limits.get("weeklyResetAnchor")
     wk_anchor = parse_ts(wk_anchor_str) if wk_anchor_str else None
     is_claudeish = (
