@@ -25,11 +25,26 @@
 
 ## Install
 
+**Run it instantly** — no install, using a runner you probably already have:
+
 ```bash
-pipx install token-oracle   # recommended — isolated environment
-pip install token-oracle    # fallback
-uvx token-oracle            # uv users
+npx token-oracle dash         # Node
+bunx token-oracle dash        # Bun
+uvx token-oracle dash         # uv
 ```
+
+**Or install** the `token-oracle` command onto your PATH:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/muslewski/token-oracle/main/install.sh | sh
+uv tool install token-oracle   # uv (isolated, fast)
+pipx install token-oracle      # pipx (isolated)
+pip install token-oracle       # pip
+```
+
+> `npx`/`bunx`/`uvx` fetch and run the latest release on demand; the installers
+> put it on your PATH. All routes are the same offline-first tool — see
+> [SETUP.md](./SETUP.md) for live web data and configuration.
 
 ## Quickstart
 
