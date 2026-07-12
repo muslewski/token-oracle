@@ -299,6 +299,8 @@ _CAP_BAND_HIGH = 5.0
 def _preset_caps(plan: str) -> tuple[int | None, int | None]:
     """(five_hour_cap, weekly_cap) from the shipped preset for `plan` (max20 fallback)."""
     pdef = PRESETS.get(plan) or PRESETS.get("max20") or {}
+    if not isinstance(pdef, dict):
+        pdef = {}
     five = wk = None
     for w in pdef.get("windows", []):
         if not isinstance(w, dict):
@@ -331,7 +333,9 @@ def _validate_external_caps(raw_five, raw_wk, preset_five, preset_wk):
             issues.append(f"external {label} {ext!r} rejected (not a number) — keeping preset")
             return None
         if not (extf > 0) or extf != extf or extf in (float("inf"), float("-inf")):
-            issues.append(f"external {label} {ext} rejected (non-positive/non-finite) — keeping preset")
+            issues.append(
+                f"external {label} {ext} rejected (non-positive/non-finite) — keeping preset"
+            )
             return None
         if preset and preset > 0:
             ratio = extf / preset
@@ -406,20 +410,23 @@ def load_config(path: str | None = None) -> "Config":
     # - weeklyCap -> weekly + fable (model-specific weekly shares the period)
     # - weeklyResetAnchor -> set on weekly/fable windows (fixed grid, exact server reset)
     # Only for claude-sourced profiles/top-level; user config values for other fields preserved.
-    claude_limits = load_claude_limits()
-    _pf, _pw = _preset_caps(plan)
-    five_cap, wk_cap, _cap_issues = _validate_external_caps(
-        claude_limits.get("fiveHourCap"), claude_limits.get("weeklyCap"), _pf, _pw
-    )
-    issues.extend(_cap_issues)
-    wk_anchor_str = claude_limits.get("weeklyResetAnchor")
-    wk_anchor = parse_ts(wk_anchor_str) if wk_anchor_str else None
     is_claudeish = (
         raw.get("source") in (None, "claude_code")
         or "claude" in str(raw.get("source", "")).lower()
         or any("claude" in str(k).lower() for k in (raw.get("profiles") or {}))
     )
+    five_cap = None
+    wk_cap = None
+    wk_anchor = None
     if is_claudeish and _should_apply_real_claude_limits():
+        claude_limits = load_claude_limits()
+        _pf, _pw = _preset_caps(plan)
+        five_cap, wk_cap, _cap_issues = _validate_external_caps(
+            claude_limits.get("fiveHourCap"), claude_limits.get("weeklyCap"), _pf, _pw
+        )
+        issues.extend(_cap_issues)
+        wk_anchor_str = claude_limits.get("weeklyResetAnchor")
+        wk_anchor = parse_ts(wk_anchor_str) if wk_anchor_str else None
         fixed = []
         for w in raw_windows:
             if isinstance(w, dict):
@@ -473,14 +480,17 @@ def load_config(path: str | None = None) -> "Config":
 
     # Apply real caps + anchors also to per-profile windows (for "claude", "grok+claude" setups).
     # Re-fetch limits (cheap) to avoid stale var issues.
-    claude_limits = load_claude_limits()
-    _pf, _pw = _preset_caps(plan)
-    five_cap, wk_cap, _ = _validate_external_caps(
-        claude_limits.get("fiveHourCap"), claude_limits.get("weeklyCap"), _pf, _pw
-    )
-    wk_anchor_str = claude_limits.get("weeklyResetAnchor")
-    wk_anchor = parse_ts(wk_anchor_str) if wk_anchor_str else None
+    five_cap = None
+    wk_cap = None
+    wk_anchor = None
     if _should_apply_real_claude_limits():
+        claude_limits = load_claude_limits()
+        _pf, _pw = _preset_caps(plan)
+        five_cap, wk_cap, _ = _validate_external_caps(
+            claude_limits.get("fiveHourCap"), claude_limits.get("weeklyCap"), _pf, _pw
+        )
+        wk_anchor_str = claude_limits.get("weeklyResetAnchor")
+        wk_anchor = parse_ts(wk_anchor_str) if wk_anchor_str else None
         for pname, pdef in list(profiles.items()):
             if not isinstance(pdef, dict):
                 continue

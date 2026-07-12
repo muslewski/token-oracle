@@ -286,6 +286,7 @@ def test_update_config_file_roundtrip(tmp_path):
 
 # --- Plan 039 cap validation tests ---
 
+
 def test_validate_caps_rejects_impossible_magnitudes():
     five, wk, issues = CFG._validate_external_caps(57000000, 270000000, 220000, 8000000)
     assert five is None and wk is None
@@ -326,14 +327,15 @@ def test_preset_caps_reads_shipped_presets():
 def test_load_config_rejects_bogus_external_caps(monkeypatch, tmp_path):
     monkeypatch.setattr(CFG, "_should_apply_real_claude_limits", lambda: True)
     monkeypatch.setattr(
-        CFG, "load_claude_limits",
+        CFG,
+        "load_claude_limits",
         lambda: {"fiveHourCap": 57000000, "weeklyCap": 270000000, "plan": "max20"},
     )
     c = CFG.load_config(str(tmp_path / "none.json"))  # -> max20 preset windows
     weekly = next(w for w in c.windows if w.name == "weekly")
     five = next(w for w in c.windows if w.name == "5h")
-    assert weekly.cap == 8000000   # preset kept, NOT 270000000
-    assert five.cap == 220000      # preset kept, NOT 57000000
+    assert weekly.cap == 8000000  # preset kept, NOT 270000000
+    assert five.cap == 220000  # preset kept, NOT 57000000
     assert any("weeklyCap" in i and "rejected" in i for i in c.issues)
     assert any("fiveHourCap" in i and "rejected" in i for i in c.issues)
 
@@ -341,7 +343,8 @@ def test_load_config_rejects_bogus_external_caps(monkeypatch, tmp_path):
 def test_load_config_honors_plausible_external_caps(monkeypatch, tmp_path):
     monkeypatch.setattr(CFG, "_should_apply_real_claude_limits", lambda: True)
     monkeypatch.setattr(
-        CFG, "load_claude_limits",
+        CFG,
+        "load_claude_limits",
         lambda: {"fiveHourCap": 240000, "weeklyCap": 9200000, "plan": "max20"},
     )
     c = CFG.load_config(str(tmp_path / "none.json"))
