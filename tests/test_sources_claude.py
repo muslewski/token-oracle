@@ -160,15 +160,19 @@ def test_scan_drops_files_older_than_cutoff(tmp_path):
 def test_iter_usage_events_skips_malformed_lines(tmp_path):
     p = tmp_path / "s.jsonl"
     p.write_text(
-        "\n".join([
-            "123",                                   # valid JSON, not an object
-            '"just a string"',                       # valid JSON, not an object
-            "[1, 2, 3]",                             # valid JSON, not an object
-            "null",                                  # valid JSON null
-            json.dumps({"message": "not-a-dict", "timestamp": "1970-01-01T01:00:00Z"}),
-            json.dumps({"message": {"usage": 5}, "timestamp": "1970-01-01T01:00:00Z"}),  # usage not a dict
-            _line("1970-01-01T01:00:00Z", 100, 50, 10),  # the one GOOD line -> 160 tokens
-        ])
+        "\n".join(
+            [
+                "123",  # valid JSON, not an object
+                '"just a string"',  # valid JSON, not an object
+                "[1, 2, 3]",  # valid JSON, not an object
+                "null",  # valid JSON null
+                json.dumps({"message": "not-a-dict", "timestamp": "1970-01-01T01:00:00Z"}),
+                json.dumps(
+                    {"message": {"usage": 5}, "timestamp": "1970-01-01T01:00:00Z"}
+                ),  # bad usage
+                _line("1970-01-01T01:00:00Z", 100, 50, 10),  # GOOD -> 160 tokens
+            ]
+        )
     )
     evs = list(iter_usage_events(str(p)))
     assert evs == [(3600.0, 160, "claude-sonnet-4-5", 100, 50, 10, 0, None)]
