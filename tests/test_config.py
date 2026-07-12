@@ -282,3 +282,72 @@ def test_update_config_file_roundtrip(tmp_path):
     loaded2 = json.loads(p.read_text())
     assert loaded2.get("live", {}).get("headed") is False
     assert loaded2.get("plan") == "pro"  # still present
+
+
+# --- Plan 039 cap validation tests ---
+
+
+def test_validate_caps_rejects_impossible_magnitudes():
+    five, wk, issues = CFG._validate_external_caps(57000000, 270000000, 220000, 8000000)
+    assert five is None and wk is None
+    assert len(issues) == 2
+    assert any("fiveHourCap" in i for i in issues)
+    assert any("weeklyCap" in i for i in issues)
+
+
+def test_validate_caps_accepts_in_band_plan_change():
+    # a plausible cap bump (~1.1x / ~1.15x) is honored, no issues
+    five, wk, issues = CFG._validate_external_caps(240000, 9200000, 220000, 8000000)
+    assert five == 240000 and wk == 9200000
+    assert issues == []
+
+
+def test_validate_caps_rejects_5h_ge_weekly():
+    # test cross-window invariant #3 directly with custom presets (both pass band but 5h >= weekly)
+    five, wk, issues = CFG._validate_external_caps(900, 800, 500, 900)
+    assert wk == 800
+    assert five is None
+    assert any("impossible" in i for i in issues)
+
+
+def test_validate_caps_rejects_nonpositive_and_nonnumeric():
+    assert CFG._validate_external_caps(0, -5, 220000, 8000000)[0] is None
+    assert CFG._validate_external_caps("big", None, 220000, 8000000)[0] is None
+    # None weekly supplied -> no issue for weekly
+    five, wk, issues = CFG._validate_external_caps(None, None, 220000, 8000000)
+    assert five is None and wk is None and issues == []
+
+
+def test_preset_caps_reads_shipped_presets():
+    assert CFG._preset_caps("max20") == (220000, 8000000)
+    assert CFG._preset_caps("pro") == (19000, 700000)
+    assert CFG._preset_caps("nonsense") == (220000, 8000000)  # max20 fallback
+
+
+def test_load_config_rejects_bogus_external_caps(monkeypatch, tmp_path):
+    monkeypatch.setattr(CFG, "_should_apply_real_claude_limits", lambda: True)
+    monkeypatch.setattr(
+        CFG,
+        "load_claude_limits",
+        lambda: {"fiveHourCap": 57000000, "weeklyCap": 270000000, "plan": "max20"},
+    )
+    c = CFG.load_config(str(tmp_path / "none.json"))  # -> max20 preset windows
+    weekly = next(w for w in c.windows if w.name == "weekly")
+    five = next(w for w in c.windows if w.name == "5h")
+    assert weekly.cap == 8000000  # preset kept, NOT 270000000
+    assert five.cap == 220000  # preset kept, NOT 57000000
+    assert any("weeklyCap" in i and "rejected" in i for i in c.issues)
+    assert any("fiveHourCap" in i and "rejected" in i for i in c.issues)
+
+
+def test_load_config_honors_plausible_external_caps(monkeypatch, tmp_path):
+    monkeypatch.setattr(CFG, "_should_apply_real_claude_limits", lambda: True)
+    monkeypatch.setattr(
+        CFG,
+        "load_claude_limits",
+        lambda: {"fiveHourCap": 240000, "weeklyCap": 9200000, "plan": "max20"},
+    )
+    c = CFG.load_config(str(tmp_path / "none.json"))
+    weekly = next(w for w in c.windows if w.name == "weekly")
+    assert weekly.cap == 9200000  # in-band external value honored
+    assert not any("rejected" in i for i in c.issues)
