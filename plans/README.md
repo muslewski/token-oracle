@@ -192,6 +192,20 @@ capture it), committed as `assets/dash-demo.gif` with a reproducible
 order (both 042 and 044 edit the top of `main()`); 045 (README + assets,
 disjoint) → a **second parallel executor**.
 
+**Round completed 2026-07-12 at `8c9e09c`**: 042 + 043 + 044 + 045 all DONE and
+merged (`--no-ff`) to local main. Two grok-xhigh executors, **zero fix rounds** —
+each passed advisor review + an independent gate re-run in its worktree on first
+submission; every diff hunk traced to a plan step, zero scope creep. Suite 240 →
+**248 tests** (+8). ruff / ruff-format clean, mypy 0 errors on merged main.
+Executor A (042→043→044, shared `main.py`) and B (045, README + assets) ran in
+parallel with zero file overlap. Behavioral proofs all pass live (see the status
+rows). The README now shows an animated demo of the real dashboard (dual-provider
+browser-verified numbers), `--help` teaches the tool, a new user gets guidance
+instead of a bare `idle`, and `oracle dash | head` no longer dumps a traceback.
+**NOT pushed to origin** — awaiting operator go (origin is at Phase-0 `7264a71`).
+Next per the roadmap: **Phase 2 — make it spread** (npx/bunx wrapper = the ccusage
+distribution channel; curl|sh; AUR; launch runbook leading with the Grok angle).
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
@@ -243,10 +257,10 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 039 | Validate external Claude caps — reject impossible values (cap deflation) | P0 | S-M | 001, 017 | DONE — grok-xhigh on advisor/039 (5 commits), merged `--no-ff` at `20e4a5b`. Gates re-run by advisor: 235 passed, ruff/format/mypy clean. Pure `_validate_external_caps` + `_preset_caps` (band [0.2x,5x] + 5h<weekly invariant + positivity/bool guard); both cap-application sites in `load_config` routed through it; `weeklyResetAnchor` untouched. **LIVE PROOF (real machine, blessed venv):** the real `~/.claude/usage-limits.json` `fiveHourCap 57000000`/`weeklyCap 270000000` are now REJECTED (259x/34x implausible) → 5h cap 220000, weekly 8000000 (presets), 2 honest `issues` recorded. Weekly % no longer deflated ~34x. |
 | 040 | Close grok `used+limit` fabrication hole (generic shape → HIGH weekly %) | P0 | S | 031, 038 | DONE — grok-xhigh on advisor/040 (3 commits), merged `--no-ff` at `64f1bd6`. Gates re-run by advisor: 229 passed, ruff/format/mypy clean. Removed `_try_emit_used_limit_pair` + both call sites (top + one-deep) from `readings_from_network_json`; kept the key-anchored `exact_pct_keys` allowlist + rate-window extractor + the plan-038 modal extractor. `rg _try_emit_used_limit_pair token_oracle` → empty. `{used:45,limit:100}` now → `[]`; `{stats:{weeklyUsagePercent:10}}` still → `weekly_pct 10.0`. The one test that asserted the hole rewritten to assert `[]`. |
 | 041 | Malformed JSONL line must never blank the forecast (iter guards + engine fallback) | P0 | S-M | 005, 016 | DONE — grok-xhigh on advisor/041 (4 commits), merged `--no-ff` at `64f1bd6`→`fe7034c`. Gates re-run by advisor: 232 passed, ruff/format/mypy clean. `isinstance(obj/msg/usage, dict)` guards in `claude_code.iter_usage_events`; matching guards in `grok.iter_total_tokens_reports`; engine single-source path now wraps `scan()` in try/except with cached-events fallback (mirrors `_forecast_one`; outer blanket `except` left intact). Malformed lines (`123`/`"x"`/`[1,2]`/`null`) → skipped, good events survive; scan crash → non-blank forecast from cache. Well-formed-line behavior unchanged. |
-| 042 | Real `--help` — descriptions, per-subcommand help, examples epilog | P1 | S | — | TODO — Phase 1. Executor A (with 043, 044), apply first. main.py argparse metadata only; tests/test_cli.py. |
-| 043 | First-run guidance — replace bare `idle` with TTY-only onboarding | P1 | S | — | TODO — Phase 1. Executor A (after 042). main.py forecast branch + `_is_interactive`/`_first_run_hint`; machine outputs unchanged. |
-| 044 | Clean pipe handling (SIGPIPE) + SETUP.md live-web/Xvfb docs | P1 | S | — | TODO — Phase 1. Executor A (after 043). `_reset_sigpipe()` at main() entry; new SETUP.md section. |
-| 045 | Embed animated dashboard demo GIF in README | P1 | S | — (GIF asset seeded by advisor) | TODO — Phase 1. Executor B (parallel, disjoint files). README.md + `assets/dash-demo.gif` + `.tape`. |
+| 042 | Real `--help` — descriptions, per-subcommand help, examples epilog | P1 | S | — | DONE — grok-xhigh executor A on advisor/phase1-cli (commit `50fbe6c`), merged `--no-ff` at `8c9e09c`. Gates re-run by advisor: 248 passed (+8 across A), ruff/format clean, mypy 0 errors. argparse metadata ONLY — `description` + examples epilog + `_CMD_HELP` + per-arg `help=` + `metavar="<command>"`; `--now` stays SUPPRESS; zero command-behavior change. Behavioral proof: `--help` shows descriptions + `examples:`, `dash --help` shows "full-screen live dashboard", `forecast --help` contains 0 `--now`. |
+| 043 | First-run guidance — replace bare `idle` with TTY-only onboarding | P1 | S | — | DONE — executor A (commit `69f50b5`), merged at `8c9e09c`. `_is_interactive` + `_first_run_hint` + forecast else-branch: no-data + TTY → actionable hint; pipe / `--json` / statusline keep the stable `idle` token. Executor correctly added a `load_config` monkeypatch to the tests (hermeticity — the real machine config is multi-profile, which would emit `(multi) idle` and break the `== "idle"` assert). LIVE proof: piped `forecast` emits 0 hint lines (stable). |
+| 044 | Clean pipe handling (SIGPIPE) + SETUP.md live-web/Xvfb docs | P1 | S | — | DONE — executor A (commit `0bf7d86`), merged at `8c9e09c`. `_reset_sigpipe()` (SIG_DFL, guarded for Windows/non-main-thread) as the first statement of `main()`; new SETUP.md "Live web data (real, browser-verified numbers)" section (enable / Xvfb / no-fingerprint-evasion notes) before Optional integrations. LIVE proof: `forecast --now 1000 | head -1` → 0 BrokenPipe/Traceback lines; `grep -c "Live web data"`=1, `xorg-server-xvfb`=1. |
+| 045 | Embed animated dashboard demo GIF in README | P1 | S | — (GIF asset seeded by advisor) | DONE — grok-xhigh executor B on advisor/phase1-readme (commit `74b2ce0`), merged `--no-ff` at `8c9e09c`. README demo block placed banner → badges → demo → `---`; `assets/dash-demo.gif` (64154 B, 760×560, byte-identical to the advisor-generated source — not re-encoded) + reproducible `assets/dash-demo.tape` committed. GIF generated by the advisor via `vhs`+`ttyd`+`ffmpeg` on the real machine (real browser-verified data: 5h 36%, fable **99%**, weekly 75%, grok 29% — dual-provider `live claude.ai`/`live grok.com` provenance visible). Zero scope creep. |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
