@@ -157,6 +157,18 @@ sources+engine), so they dispatch as **three parallel grok-xhigh executors**. Ro
   path lacks the multi path's guard; source iterators assume every line is a dict). Fix =
   type-guard the iterators + mirror the cached-events fallback.
 
+**Round completed 2026-07-12 at `fe7034c`**: 039 + 040 + 041 all DONE and merged (three
+grok-xhigh executors dispatched in parallel worktrees, **zero fix rounds** — each passed
+advisor review + an independent gate re-run on first submission; every diff hunk traced to a
+plan step, zero scope creep). Suite 229 → **240 tests** (+21). ruff / ruff-format / mypy exit
+0 on merged main. **The Phase-0 truthfulness gate is cleared:** the cap-deflation bug is
+proven fixed against the operator's real `~/.claude/usage-limits.json` (57M/270M → rejected →
+correct presets + honest issues), the grok `{used,limit}` fabrication path is gone, and a
+malformed log line can no longer blank the forecast. `oracle` entrypoint unaffected this
+round (executors were instructed NOT to `pip install -e`, avoiding the clobber + the
+concurrent-install race). Next per the roadmap: **Phase 1 — make it visible** (screenshot/GIF
+README, real `--help`, first-run guidance) once the operator gives the go.
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
@@ -205,9 +217,9 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 037 | Claude Fable weekly row separated from All-models (high-conf `model_weekly_pct`) | P1 | M | 035 | DONE — executed 2026-07-10 by grok-xhigh on advisor/037 (3 commits), merged to main at `98f364c`. Gates re-run by advisor: 211 passed (+3), ruff/format/mypy clean on its files (the 2 E501 in test_live_claude_extract.py:78,210 are pre-existing, confirmed on base). **LIVE PROOF (headed probe against the worktree)**: claude `ok`, `weekly_pct=60` (All models, HIGH) + `model_weekly_pct=99 model=fable` (HIGH) — clean per-meter evidence, no "Fabl" bleed. **Full overlay E2E on main**: `(claude,fable)` cell = 99.0 live, `(claude,weekly)`=60.0, `(claude,5h)`=26.0 — all high-conf applied. |
 | 038 | Grok live weekly usage via `?_s=usage` modal (corrects wrong RC-B "no page") | P1 | S | 035, 037 | DONE — implemented **directly by advisor** 2026-07-11 on advisor/038 (operator chose direct over executor). Root cause was the wrong route (`settings/usage` bounces); real surface is the `?_s=usage` modal (plain-text %s, no aria/JSON). Repointed `fetch_grok_live_usage` + added text-anchored `readings_from_usage_modal` + `parse_absolute_reset` + overlay `grok_build` cell + dash domain fix. **LIVE PROOF (headed Xvfb)**: grok `state=ok`, `weekly_pct=23.0` HIGH, `model_weekly_pct=22.0 grok_build` HIGH, `reset_at`=Jul 17 2026; dash header `grok ● live 23%`, panel weekly row live. Gates: 219 passed (+8), ruff/format/mypy clean. |
 
-| 039 | Validate external Claude caps — reject impossible values (cap deflation) | P0 | S-M | 001, 017 | TODO |
-| 040 | Close grok `used+limit` fabrication hole (generic shape → HIGH weekly %) | P0 | S | 031, 038 | TODO |
-| 041 | Malformed JSONL line must never blank the forecast (iter guards + engine fallback) | P0 | S-M | 005, 016 | TODO |
+| 039 | Validate external Claude caps — reject impossible values (cap deflation) | P0 | S-M | 001, 017 | DONE — grok-xhigh on advisor/039 (5 commits), merged `--no-ff` at `20e4a5b`. Gates re-run by advisor: 235 passed, ruff/format/mypy clean. Pure `_validate_external_caps` + `_preset_caps` (band [0.2x,5x] + 5h<weekly invariant + positivity/bool guard); both cap-application sites in `load_config` routed through it; `weeklyResetAnchor` untouched. **LIVE PROOF (real machine, blessed venv):** the real `~/.claude/usage-limits.json` `fiveHourCap 57000000`/`weeklyCap 270000000` are now REJECTED (259x/34x implausible) → 5h cap 220000, weekly 8000000 (presets), 2 honest `issues` recorded. Weekly % no longer deflated ~34x. |
+| 040 | Close grok `used+limit` fabrication hole (generic shape → HIGH weekly %) | P0 | S | 031, 038 | DONE — grok-xhigh on advisor/040 (3 commits), merged `--no-ff` at `64f1bd6`. Gates re-run by advisor: 229 passed, ruff/format/mypy clean. Removed `_try_emit_used_limit_pair` + both call sites (top + one-deep) from `readings_from_network_json`; kept the key-anchored `exact_pct_keys` allowlist + rate-window extractor + the plan-038 modal extractor. `rg _try_emit_used_limit_pair token_oracle` → empty. `{used:45,limit:100}` now → `[]`; `{stats:{weeklyUsagePercent:10}}` still → `weekly_pct 10.0`. The one test that asserted the hole rewritten to assert `[]`. |
+| 041 | Malformed JSONL line must never blank the forecast (iter guards + engine fallback) | P0 | S-M | 005, 016 | DONE — grok-xhigh on advisor/041 (4 commits), merged `--no-ff` at `64f1bd6`→`fe7034c`. Gates re-run by advisor: 232 passed, ruff/format/mypy clean. `isinstance(obj/msg/usage, dict)` guards in `claude_code.iter_usage_events`; matching guards in `grok.iter_total_tokens_reports`; engine single-source path now wraps `scan()` in try/except with cached-events fallback (mirrors `_forecast_one`; outer blanket `except` left intact). Malformed lines (`123`/`"x"`/`[1,2]`/`null`) → skipped, good events survive; scan crash → non-blank forecast from cache. Well-formed-line behavior unchanged. |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
