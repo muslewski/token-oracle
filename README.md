@@ -13,6 +13,14 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
 </p>
 
+<p align="center">
+  <img src="./assets/dash-demo.gif" alt="token-oracle dash — live forecast of Claude Code and Grok token usage, with time left before each cap" width="720">
+</p>
+
+<p align="center">
+  <sub><b>Live dashboard</b> — real, browser-verified usage for <b>Claude Code and Grok</b>, with time left before each cap. No API keys; reads local logs, optionally verifies against the sites.</sub>
+</p>
+
 ---
 
 ## Install
