@@ -193,6 +193,12 @@ def test_single_path_scan_failure_falls_back_to_cached_events(monkeypatch, tmp_p
     }
     monkeypatch.setattr(ENG, "load_cache", lambda *a, **k: cache)
     monkeypatch.setattr(ENG, "save_cache", lambda *a, **k: None)
+    # Isolate the intentional Claude 5h server overlay: it reads the real
+    # ~/.claude/usage-limits.json / live 5h and would override the cached
+    # `used` with real machine state, making this assertion non-hermetic
+    # (green in CI, flaky on a dev machine with real usage < 5000).
+    monkeypatch.setattr(ENG, "try_get_claude_five_hour_data", lambda *a, **k: None)
+    monkeypatch.setattr(ENG, "try_get_claude_five_hour_remaining", lambda *a, **k: None)
 
     cfg = Config(
         source="claude_code",
