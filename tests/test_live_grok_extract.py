@@ -205,18 +205,20 @@ def test_bare_limit_alone_yields_nothing():
     assert rs == []
 
 
-def test_used_limit_pair_at_top_emits_one_weekly_45_high():
-    """{"used": 45, "limit": 100} -> exactly one weekly reading, value 45.0, CONF_HIGH."""
+def test_used_limit_pair_at_top_yields_nothing_now():
+    """Generic {used, limit} is NOT weekly evidence (grok has no such endpoint — plan 038).
+    Removing this closes the fabrication hole (plan 040)."""
     now = time.time()
     rs = readings_from_network_json("https://example", {"used": 45, "limit": 100}, now)
-    assert len(rs) == 1
-    r = rs[0]
-    assert r.metric == METRIC_WEEKLY_PCT
-    assert r.value == 45.0
-    assert r.confidence == CONF_HIGH
-    assert "used=45" in r.evidence
-    assert "limit=100" in r.evidence
-    assert "grok.network_json.usage" in r.extractor
+    assert rs == []
+
+
+
+def test_used_limit_pair_one_level_deep_yields_nothing_now():
+    """Nested generic {used, limit} also yields nothing (pair path fully removed)."""
+    now = time.time()
+    rs = readings_from_network_json("u", {"someQuota": {"used": 45, "limit": 100}}, now)
+    assert rs == []
 
 
 def test_exact_key_one_level_deep_still_works():
