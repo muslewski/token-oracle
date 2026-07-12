@@ -168,3 +168,39 @@ def test_multi_forecast_and_detect(tmp_path):
         [Forecast("w", 5, 100, 5, None, 10, False, profile="grok")],
     )
     assert len(rs) >= 1
+
+
+def test_single_path_scan_failure_falls_back_to_cached_events(monkeypatch, tmp_path):
+    """A scan crash in the legacy single-source path must fall back to cached
+    events (non-blank forecast) instead of the outer except returning []."""
+    from token_oracle.core import engine as ENG
+
+    now = 10_000_000.0
+
+    class BoomSource:
+        def scan(self, *a, **k):
+            raise RuntimeError("malformed log blew up scan")
+
+    monkeypatch.setattr("token_oracle.sources.base.get_source", lambda *a, **k: BoomSource())
+
+    # warm cache with one good event well within the window, and a stale lastAggregate
+    # so the aggregate branch (which calls scan) is taken.
+    cache = {
+        "files": {},
+        "events": [[now - 100, 5000, "claude-sonnet-4-5", 5000, 0, 0, 0, None]],
+        "profile": [],
+        "lastAggregate": 0,
+    }
+    monkeypatch.setattr(ENG, "load_cache", lambda *a, **k: cache)
+    monkeypatch.setattr(ENG, "save_cache", lambda *a, **k: None)
+
+    cfg = Config(
+        source="claude_code",
+        windows=[Window(name="5h", cap=220000, period_secs=18000)],
+        cache_path=str(tmp_path / "cache.json"),
+    )
+    fs = ENG.forecast(now, cfg)
+    assert fs, "forecast blanked on scan failure instead of using cached events"
+    # the cached 5000-token event is reflected in the 5h window's used
+    five = next(f for f in fs if f.window == "5h")
+    assert five.used >= 5000
