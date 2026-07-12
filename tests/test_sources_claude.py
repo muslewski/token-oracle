@@ -155,3 +155,29 @@ def test_scan_drops_files_older_than_cutoff(tmp_path):
     files, events = src.scan({}, now=now, window=window)
     assert events == []
     assert not any("a.jsonl" in k for k in files)
+
+
+def test_iter_usage_events_skips_malformed_lines(tmp_path):
+    p = tmp_path / "s.jsonl"
+    p.write_text(
+        "\n".join([
+            "123",                                   # valid JSON, not an object
+            '"just a string"',                       # valid JSON, not an object
+            "[1, 2, 3]",                             # valid JSON, not an object
+            "null",                                  # valid JSON null
+            json.dumps({"message": "not-a-dict", "timestamp": "1970-01-01T01:00:00Z"}),
+            json.dumps({"message": {"usage": 5}, "timestamp": "1970-01-01T01:00:00Z"}),  # usage not a dict
+            _line("1970-01-01T01:00:00Z", 100, 50, 10),  # the one GOOD line -> 160 tokens
+        ])
+    )
+    evs = list(iter_usage_events(str(p)))
+    assert evs == [(3600.0, 160, "claude-sonnet-4-5", 100, 50, 10, 0, None)]
+
+
+def test_scan_survives_malformed_line(tmp_path):
+    proj = tmp_path / "projects" / "repo"
+    proj.mkdir(parents=True)
+    (proj / "a.jsonl").write_text("\n".join(["[1,2,3]", _line("1970-01-01T01:00:00Z", 100, 0, 0)]))
+    src = get_source("claude_code", {"projects_dir": str(tmp_path / "projects")})
+    files, events = src.scan({}, now=7200.0, window=7200.0)
+    assert events == [(3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None)]

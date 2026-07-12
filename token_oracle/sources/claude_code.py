@@ -38,9 +38,13 @@ def iter_usage_events(jsonl_path):
                 obj = json.loads(raw)
             except ValueError:
                 continue
-            msg = obj.get("message") or {}
+            if not isinstance(obj, dict):
+                continue
+            msg = obj.get("message")
+            if not isinstance(msg, dict):
+                continue
             usage = msg.get("usage")
-            if not usage:
+            if not isinstance(usage, dict):
                 continue
             ts = parse_ts(obj.get("timestamp"))
             if ts is None:
