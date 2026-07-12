@@ -474,8 +474,10 @@ def load_config(path: str | None = None) -> "Config":
     # Apply real caps + anchors also to per-profile windows (for "claude", "grok+claude" setups).
     # Re-fetch limits (cheap) to avoid stale var issues.
     claude_limits = load_claude_limits()
-    five_cap = claude_limits.get("fiveHourCap")
-    wk_cap = claude_limits.get("weeklyCap")
+    _pf, _pw = _preset_caps(plan)
+    five_cap, wk_cap, _ = _validate_external_caps(
+        claude_limits.get("fiveHourCap"), claude_limits.get("weeklyCap"), _pf, _pw
+    )
     wk_anchor_str = claude_limits.get("weeklyResetAnchor")
     wk_anchor = parse_ts(wk_anchor_str) if wk_anchor_str else None
     if _should_apply_real_claude_limits():
