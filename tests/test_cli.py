@@ -1,9 +1,11 @@
 import json
 import os
 import time as _time
+from types import SimpleNamespace
 
 import pytest
 
+import token_oracle.cli.main as cli_main
 from token_oracle.cli.main import main
 
 
@@ -408,3 +410,41 @@ def test_now_flag_is_hidden(capsys):
     out = capsys.readouterr().out
     assert "--now" not in out
     assert "--json" in out
+
+
+# --- plan 043: first-run guidance for interactive TTY only (stable "idle" elsewhere) ---
+
+
+def test_forecast_no_data_interactive_shows_hint(monkeypatch, capsys):
+    monkeypatch.setattr(cli_main, "run_forecast", lambda now, cfg: [])
+    monkeypatch.setattr(cli_main, "_is_interactive", lambda: True)
+    fake_cfg = SimpleNamespace(profiles=None, source="generic", source_opts={})
+    monkeypatch.setattr(cli_main, "load_config", lambda p: fake_cfg)
+    rc = cli_main.main(["forecast", "--now", "1000"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no usage data yet" in out
+    assert "oracle doctor" in out
+    assert out.strip() != "idle"
+
+
+def test_forecast_no_data_noninteractive_still_idle(monkeypatch, capsys):
+    monkeypatch.setattr(cli_main, "run_forecast", lambda now, cfg: [])
+    monkeypatch.setattr(cli_main, "_is_interactive", lambda: False)
+    # Force a config without profiles so we get bare "idle" (default load may be multi-profile)
+    fake_cfg = SimpleNamespace(profiles=None, source="generic", source_opts={})
+    monkeypatch.setattr(cli_main, "load_config", lambda p: fake_cfg)
+    rc = cli_main.main(["forecast", "--now", "1000"])
+    assert rc == 0
+    assert capsys.readouterr().out.strip() == "idle"
+
+
+def test_forecast_no_data_json_unaffected(monkeypatch, capsys):
+    monkeypatch.setattr(cli_main, "run_forecast", lambda now, cfg: [])
+    monkeypatch.setattr(cli_main, "_is_interactive", lambda: True)
+    fake_cfg = SimpleNamespace(profiles=None, source="generic", source_opts={})
+    monkeypatch.setattr(cli_main, "load_config", lambda p: fake_cfg)
+    rc = cli_main.main(["forecast", "--json", "--now", "1000"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no usage data yet" not in out  # json path never shows the hint

@@ -47,6 +47,34 @@ def _now(args):
     return args.now if args.now is not None else time.time()
 
 
+def _is_interactive():
+    """True when stdout is an interactive terminal (not a pipe / file / capture).
+
+    Isolated into a helper so tests can monkeypatch it; capturing stdout in a
+    test makes the real isatty() False, which would hide the guidance branch.
+    """
+    try:
+        return sys.stdout.isatty()
+    except Exception:
+        return False
+
+
+def _first_run_hint():
+    """Actionable guidance shown when `forecast` finds no data on a real TTY."""
+    return (
+        "no usage data yet.\n"
+        "\n"
+        "token-oracle forecasts from your agent's local logs — there is nothing\n"
+        "to forecast until some exist.\n"
+        "  • Claude Code: use it once; logs appear under ~/.claude/projects/\n"
+        "  • see what oracle found:   oracle doctor\n"
+        "  • create a config:         oracle init\n"
+        "  • turn on live web numbers: oracle live on   (then: oracle live-setup)\n"
+        "\n"
+        "docs: https://github.com/muslewski/token-oracle"
+    )
+
+
 def _doctor_lines(cfg, config_path, color, now):
     avail = available()
 
@@ -380,7 +408,15 @@ def main(argv=None):
         if args.json:
             print(json.dumps(build_snapshot(fs, now), indent=2))
         else:
-            out = sl.render(fs) or "idle"
+            out = sl.render(fs)
+            if not out:
+                # No data. A human at a terminal gets guidance; everything
+                # non-interactive (pipes, status bars, scripts) keeps the
+                # stable "idle" token it has always emitted.
+                if _is_interactive():
+                    print(_first_run_hint())
+                    return 0
+                out = "idle"
             if cfg.profiles:
                 out = "(multi) " + out
             print(out)
