@@ -213,7 +213,6 @@ def test_used_limit_pair_at_top_yields_nothing_now():
     assert rs == []
 
 
-
 def test_used_limit_pair_one_level_deep_yields_nothing_now():
     """Nested generic {used, limit} also yields nothing (pair path fully removed)."""
     now = time.time()
