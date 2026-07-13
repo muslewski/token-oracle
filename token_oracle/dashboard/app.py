@@ -32,6 +32,7 @@ BAR_W = 22  # default/maximum gauge width
 BAR_W_MIN = 6  # narrowest legible gauge
 MIN_BOX = 34  # min box width that still fits "glyph name pct bar reset"
 BOX_MAX = 66  # widest stacked box (unchanged from today)
+BARS_MIN = 16  # min width for borderless slider bars (below this -> compact text)
 
 
 def _clamp(v, lo, hi):
@@ -43,6 +44,13 @@ def _bar_w_for(box_w: int) -> int:
     ~26 cells on 'glyph name<6> pct<4> reset<~7>' plus spacing; the rest is
     the bar, clamped to a legible range."""
     return _clamp(box_w - 26, BAR_W_MIN, BAR_W)
+
+
+def _bars_bar_w_for(w: int) -> int:
+    """Gauge width for a borderless bar row. The row prefix spends 13 cells on
+    '  {label:<5} {pct:>4} '; the rest is the bar, clamped to a legible minimum
+    so the % (which precedes the bar) always survives."""
+    return _clamp(w - 13, 3, BAR_W)
 
 
 _EIGHTHS = "▏▎▍▌▋▊▉"  # 1/8..7/8 left-fraction blocks; a full cell is █
