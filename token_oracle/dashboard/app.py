@@ -73,6 +73,28 @@ def _profile_icon(profile):
     return c.M_ORACLE
 
 
+def _fit_join(prefix: str, items: list[str], width: int, sep: str = " · ") -> str:
+    """Return `prefix` + as many `items` (in order) as fit within `width` display
+    cells, joined by `sep`. Never emits a trailing separator; never exceeds
+    `width`. `prefix` and `items` may already contain ANSI (measured by
+    display_width). If not even the first item fits after the prefix, returns the
+    prefix trimmed to width (caller orders items so items[0] is most important)."""
+    from ..cli.colors import display_width
+    if not items:
+        return prefix
+    out = prefix
+    used = display_width(prefix)
+    first = True
+    for it in items:
+        add = (0 if first else display_width(sep)) + display_width(it)
+        if used + add > width:
+            break
+        out = out + ("" if first else sep) + it
+        used += add
+        first = False
+    return out
+
+
 def _fmt_reset_abs(reset_in, now):
     # Use friendly format: minutes first, proper d/h for long (no 156:00)
     return fmt_reset(reset_in)
