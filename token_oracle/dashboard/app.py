@@ -583,6 +583,32 @@ def render_frame(
             return [c.dim("(no data)", enabled)]
         return [_compact_profile_line(pn, groups[pn], now, enabled, cells, w) for pn in sorted(groups)]
 
+    def glance_fill() -> list[str]:
+        if not groups:
+            return [c.dim(f"{c.M_ORACLE} token-oracle  (no data)", enabled)]
+        items = []
+        for pn in sorted(groups):
+            best = None  # (pct, short)
+            p_canon = "grok" if "grok" in pn.lower() else "claude"
+            for f in groups[pn]:
+                if bool(getattr(f, "idle", False)):
+                    continue
+                ww = (f.window or "").lower()
+                if "5h" in ww or "session" in ww or "current" in ww:
+                    pct = (100.0 * f.used / f.cap) if getattr(f, "cap", 0) else 0.0
+                    short = "5h"
+                else:
+                    wkey = "weekly" if ww in ("weekly", "week") else ("fable" if ww == "fable" else None)
+                    cell = (cells or {}).get((p_canon, wkey)) if wkey else None
+                    pct = cell.pct if (cell and cell.pct is not None) else f.projected_pct
+                    short = "wk" if ww in ("weekly", "week") else (ww or "?")
+                if best is None or float(pct) > best[0]:
+                    best = (float(pct), short)
+            if best is not None:
+                items.append(c.gauge(f"{best[1]} {round(best[0])}%", best[0], enabled))
+        prefix = c.violet(f"{c.M_ORACLE} ", enabled)
+        return [_fit_join(prefix, items, w)]
+
     def activity_fill() -> list[str]:
         log = list(probe_log or [])[:3]
         out: list[str] = []
@@ -603,6 +629,7 @@ def render_frame(
     #   meta    header+alert+panels(2/row)+footer            (drop provenance + activity)
     #   heads   header+alert+panels(1/row)+footer            (key % rows only)
     #   oneline header+alert+one compact line per profile    (no boxes)
+    #   glance  header+alert+glance(1)                       (worst-per-provider 🔮 line)
     #   tiny    header only (title + live summary chip)
     def _regions_for(level: str) -> list["Region"]:
         if level == "full":
@@ -634,10 +661,12 @@ def render_frame(
                 Region("alert", ALERT_H, alert_fill),
                 Region("compact", len(clines), lambda: clines),
             ]
+        if level == "glance":
+            return [Region("glance", 1, glance_fill)]
         return [Region("header", HEADER_H, header_fill)]  # tiny
 
     avail_h = int(getattr(size, "lines", 0) or 0) if size is not None else 0
-    for level in ("full", "meta", "heads", "oneline", "tiny"):
+    for level in ("full", "meta", "heads", "oneline", "glance", "tiny"):
         regs = _regions_for(level)
         total = sum(r.height for r in regs)
         if avail_h == 0 or total <= avail_h:
