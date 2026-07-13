@@ -28,7 +28,21 @@ from ..live.overlay import overlay_cells, rate_info
 from ..live.store import load_snapshot
 from .scene import Painter, Region, Scene
 
-BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
+BAR_W = 22          # default/maximum gauge width
+BAR_W_MIN = 6       # narrowest legible gauge
+MIN_BOX = 34        # min box width that still fits "glyph name pct bar reset"
+BOX_MAX = 66        # widest stacked box (unchanged from today)
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _bar_w_for(box_w: int) -> int:
+    """Gauge width derived from the box's inner width. The head line spends
+    ~26 cells on 'glyph name<6> pct<4> reset<~7>' plus spacing; the rest is
+    the bar, clamped to a legible range."""
+    return _clamp(box_w - 26, BAR_W_MIN, BAR_W)
 
 
 _EIGHTHS = "▏▎▍▌▋▊▉"  # 1/8..7/8 left-fraction blocks; a full cell is █
@@ -205,7 +219,7 @@ def _active_row_targets(forecasts, cells) -> dict:
 
 
 def _render_profile_block(
-    pname, forecasts, now, enabled, cells=None, width=66, detail=2, anim_pct=None, pulse=None
+    pname, forecasts, now, enabled, cells=None, width=66, detail=2, anim_pct=None, pulse=None, bar_w=BAR_W
 ):
     """Render a boxed panel. `detail` sets lines per window row (height ladder):
       2 = head + meta + provenance (full), 1 = head + meta, 0 = head only.
@@ -301,7 +315,7 @@ def _render_profile_block(
         plevel = pulse.get(akey, 0.0) if (pulse and akey) else 0.0
         if plevel > 0:
             glyph = _pulse_glyph(glyph, plevel, enabled)
-        bar = _bar(bar_pct, enabled, BAR_W)
+        bar = _bar(bar_pct, enabled, bar_w)
         pct_num = f"{round(display_pct):3d}%"
         is_key = (wname.lower() in ("weekly", "fable")) and (
             ("grok" in pname.lower() and wname.lower() == "weekly")
