@@ -313,3 +313,31 @@ def test_compact_no_dangling_separator():
         gline = gframe[0] if gframe else ""
         gplain = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", gline)
         assert not gplain.rstrip().endswith("·"), f"glance W={W} ends sep: {gplain!r}"
+
+
+def test_glance_binding_survives_across_providers():
+    """1-row + narrow: glance must show the highest-% window across ALL providers,
+    even when the alphabetically-first provider has a lower %. Regression: glance
+    used to append per-provider unsorted, dropping the binding when truncated."""
+    import re as _re
+
+    fs = [
+        Forecast("weekly", 33, 100, 33.0, None, 7200.0, False, profile="claude"),
+        Forecast("5h", 99, 100, 99.0, None, 7200.0, False, profile="fable"),
+    ]
+    for W in (16, 12, 10):
+        frame = render_frame(fs, now=100000.0, color=False, size=os.terminal_size((W, 1)))
+        assert len(frame) == 1
+        plain = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", frame[0])
+        assert "99%" in plain, f"W={W} glance dropped binding 99%: {plain!r}"
+        assert display_width(frame[0]) <= W
+
+
+def test_glance_item_is_pct_first():
+    """Glance items are formatted pct-first ('99% 5h') so the number leads."""
+    import re as _re
+
+    fs = [Forecast("5h", 99, 100, 99.0, None, 7200.0, False, profile="fable")]
+    frame = render_frame(fs, now=100000.0, color=False, size=os.terminal_size((30, 1)))
+    plain = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", frame[0])
+    assert "99% 5h" in plain, f"expected pct-first '99% 5h', got: {plain!r}"

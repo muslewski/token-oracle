@@ -590,7 +590,7 @@ def render_frame(
     def glance_fill() -> list[str]:
         if not groups:
             return [c.dim(f"{c.M_ORACLE} token-oracle  (no data)", enabled)]
-        items = []
+        scored = []  # (pct, rendered) — pct-first text so the % survives truncation
         for pn in sorted(groups):
             best = None  # (pct, short)
             p_canon = "grok" if "grok" in pn.lower() else "claude"
@@ -613,7 +613,9 @@ def render_frame(
                 if best is None or float(pct) > best[0]:
                     best = (float(pct), short)
             if best is not None:
-                items.append(c.gauge(f"{best[1]} {round(best[0])}%", best[0], enabled))
+                scored.append((best[0], c.gauge(f"{round(best[0])}% {best[1]}", best[0], enabled)))
+        scored.sort(key=lambda t: t[0], reverse=True)  # binding (highest %) first
+        items = [rendered for _, rendered in scored]
         prefix = c.violet(f"{c.M_ORACLE} ", enabled)
         return [_fit_join(prefix, items, w)]
 
