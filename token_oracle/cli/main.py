@@ -21,6 +21,7 @@ from ..core.config import (
     load_config,
     write_default_config,
 )
+from ..core.engine import cached_events
 from ..core.engine import forecast as run_forecast
 from ..core.profile import HIST_SECS
 from ..core.timeutil import fmt_dur, fmt_tokens
@@ -220,6 +221,103 @@ def _report_sections(cfg, now, args):
         ]
         sections.append({"profile": cfg.source, "cap": cap, "by": by, "rows": secs})
     return sections
+
+
+def _statusline_render(cfg, now, fs, enabled):
+    """Compose statusline. Headline if ratelimits 5h header present; else
+    old sl.render + optional cost tail (byte-identical fallback)."""
+    try:
+        evs = cached_events(cfg)
+        usd = report_mod.cost_today(
+            evs, now, getattr(cfg, "cost_mode", "auto"), getattr(cfg, "pricing", {})
+        )["usd"]
+    except Exception:
+        usd = 0.0
+    from ..core import ratelimits as RL
+
+    fh = RL.five_hour(now)
+    wk = RL.weekly(now)
+    cost_tail = sl.cost_segment(usd, enabled) if hasattr(sl, "cost_segment") else ""
+    # headline when we have current-usage 5h from header (never use projected_pct here)
+    if (
+        isinstance(fh, dict)
+        and not fh.get("stale")
+        and isinstance(fh.get("used_percentage"), (int, float))
+    ):
+        p5 = round(fh["used_percentage"])
+        parts = [colors.violet("◔", enabled) + " " + colors.gauge(f"5h {p5}%", p5, enabled)]
+        if (
+            isinstance(wk, dict)
+            and not wk.get("stale")
+            and isinstance(wk.get("used_percentage"), (int, float))
+        ):
+            pw = round(wk["used_percentage"])
+            parts.append(colors.gauge(f"wk {pw}%", pw, enabled))
+        line = " · ".join(parts)
+        if cost_tail:
+            line += cost_tail
+        return line
+    # fallback: exact old render + cost (when no RL snapshot)
+    base = sl.render(fs, enabled) if fs else ""
+    if cost_tail:
+        base = (base + cost_tail) if base else cost_tail.lstrip()
+    return base or "idle"
+
+
+def _statusline_install(force=False, path=None):
+    """Safe --install: backup, idempotent, refuse non-oracle unless --force,
+    atomic write, touches only statusLine key. Returns exit code."""
+    import shutil
+    import tempfile
+
+    color = colors.color_enabled()
+    settings = os.path.expanduser(path or "~/.claude/settings.json")
+    claude_dir = os.path.dirname(settings)
+    if not os.path.isdir(claude_dir):
+        print("~/.claude not found — is Claude Code installed? (nothing changed)")
+        return 1
+    data = {}
+    if os.path.exists(settings):
+        try:
+            with open(settings, encoding="utf-8") as fh:
+                data = json.load(fh)
+            if not isinstance(data, dict):
+                print(f"{settings} is not a JSON object — refusing to edit.")
+                return 1
+        except (OSError, ValueError) as e:
+            print(f"could not read {settings}: {e} — refusing to edit.")
+            return 1
+    desired = {"type": "command", "command": "oracle statusline", "padding": 0}
+    existing = data.get("statusLine")
+    if existing == desired:
+        print(colors.ok_badge(True, color) + " statusLine already wired to oracle.")
+        return 0
+    if existing and not force:
+        print("A statusLine is already configured:")
+        print("  " + json.dumps(existing))
+        print("Pass --force to replace it with `oracle statusline`.")
+        return 1
+    # backup
+    if os.path.exists(settings):
+        try:
+            shutil.copy2(settings, settings + ".oracle.bak")
+            print(colors.ok_badge(True, color) + f" backed up → {settings}.oracle.bak")
+        except OSError:
+            pass
+    data["statusLine"] = desired
+    # atomic write
+    try:
+        fd, tmp = tempfile.mkstemp(dir=claude_dir or ".", suffix=".tmp", text=True)
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            json.dump(data, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, settings)
+    except OSError as e:
+        print(f"write failed: {e}")
+        return 1
+    print(colors.ok_badge(True, color) + " statusLine → oracle statusline")
+    print("Restart Claude Code to see it. 5h / weekly light up as it feeds usage headers.")
+    return 0
 
 
 def _maybe_ingest_rate_limits() -> None:
@@ -552,6 +650,20 @@ def main(argv=None):
                 default=7,
                 help="number of days for the default daily view (default: 7)",
             )
+        if name == "statusline":
+            sp.add_argument(
+                "--install",
+                action="store_true",
+                help=(
+                    "wire `oracle statusline` into ~/.claude/settings.json "
+                    "as your Claude Code statusLine"
+                ),
+            )
+            sp.add_argument(
+                "--force",
+                action="store_true",
+                help="with --install, replace an existing statusLine",
+            )
         if name == "snapshot":
             sp.add_argument(
                 "--out",
@@ -719,7 +831,9 @@ def main(argv=None):
         return 0
     if args.cmd == "statusline":
         _maybe_ingest_rate_limits()
-        print(sl.render(run_forecast(now, cfg)))
+        if getattr(args, "install", False):
+            return _statusline_install(force=getattr(args, "force", False))
+        print(_statusline_render(cfg, now, run_forecast(now, cfg), colors.color_enabled()))
         return 0
     if args.cmd == "tmux":
         print(tx.render(run_forecast(now, cfg)))
