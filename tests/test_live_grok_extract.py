@@ -52,12 +52,22 @@ def test_bars_fixture_emits_one_weekly_high_and_scales_fraction():
     now = time.time()
     rs = readings_from_progressbars(bars, now)
     weeklies = [r for r in rs if r.metric == METRIC_WEEKLY_PCT]
+    # Grok build + Weekly SuperGrok Heavy Limit; bare "Usage …" decoy rejected
     assert len(weeklies) == 2  # 10% + 0.1 -> 10%
     vals = sorted(r.value for r in weeklies)
     assert vals == [10.0, 10.0]
     assert all(r.confidence == CONF_HIGH for r in weeklies)
-    # decoy bar with "Sidebar" label produces nothing
+    # decoys: Sidebar + bare "Usage …" produce nothing
     assert len([r for r in rs if "Sidebar" in (r.evidence or "")]) == 0
+    assert len([r for r in rs if "Usage sidebar" in (r.evidence or "")]) == 0
+
+
+def test_progressbar_bare_usage_label_yields_nothing():
+    """Bare 'usage' alone must not become CONF_HIGH weekly (F-A5-2)."""
+    now = time.time()
+    bars = [{"valuenow": "45", "valuemax": "100", "label": "Usage settings"}]
+    rs = readings_from_progressbars(bars, now)
+    assert rs == []
 
 
 def test_sections_yields_nothing_for_unlabeled_chat_and_weekly_plus_reset_for_real():
@@ -80,7 +90,7 @@ def test_sections_yields_nothing_for_unlabeled_chat_and_weekly_plus_reset_for_re
     assert resets[0].confidence == CONF_MEDIUM
 
 
-def test_merge_agree_upgrades_to_high_and_conflict_downgrades_both():
+def test_merge_agree_upgrades_to_high_and_conflict_prefer_trust():
     now = time.time()
     from token_oracle.live.contract import LiveReading
 
@@ -106,19 +116,63 @@ def test_merge_agree_upgrades_to_high_and_conflict_downgrades_both():
     assert len(merged) == 1
     assert merged[0].confidence == CONF_HIGH
 
-    c = LiveReading(
-        "grok",
-        METRIC_WEEKLY_PCT,
-        13.0,
-        CONF_MEDIUM,
-        "grok.labeled_text",
-        "other 13%",
-        now,
+    # Equal-trust conflict → both LOW
+    equal_a = LiveReading(
+        "grok", METRIC_WEEKLY_PCT, 10.0, CONF_MEDIUM, "grok.labeled_text", "a", now
     )
-    conflicted = merge_readings([a, c])
+    equal_b = LiveReading(
+        "grok", METRIC_WEEKLY_PCT, 13.0, CONF_MEDIUM, "grok.labeled_text2", "b", now
+    )
+    conflicted = merge_readings([equal_a, equal_b])
     assert len(conflicted) == 2
     assert all(r.confidence == CONF_LOW for r in conflicted)
     assert any("conflicts with" in (r.evidence or "") for r in conflicted)
+
+
+def test_merge_conflict_prefers_modal_over_progressbar():
+    """A correct modal weekly must survive a decoy progressbar (quality-pass F-A5-1)."""
+    now = time.time()
+    from token_oracle.live.contract import LiveReading
+
+    modal = LiveReading(
+        "grok",
+        METRIC_WEEKLY_PCT,
+        23.0,
+        CONF_HIGH,
+        "grok.usage_modal.text",
+        "Weekly SuperGrok Heavy Limit — 23% used",
+        now,
+    )
+    decoy = LiveReading(
+        "grok",
+        METRIC_WEEKLY_PCT,
+        80.0,
+        CONF_HIGH,
+        "grok.progressbar",
+        "Usage sidebar 80%",
+        now,
+    )
+    merged = merge_readings([modal, decoy])
+    highs = [r for r in merged if r.confidence == CONF_HIGH]
+    assert len(highs) == 1
+    assert highs[0].value == 23.0
+    assert "usage_modal" in highs[0].extractor
+    lows = [r for r in merged if r.confidence == CONF_LOW]
+    assert any(r.value == 80.0 for r in lows)
+
+
+def test_merge_two_medium_agree_does_not_upgrade_to_high():
+    """Two text scrapes agreeing is not structured evidence (F-A5-6)."""
+    now = time.time()
+    from token_oracle.live.contract import LiveReading
+
+    a = LiveReading("grok", METRIC_WEEKLY_PCT, 10.0, CONF_MEDIUM, "grok.labeled_text", "a 10%", now)
+    b = LiveReading(
+        "grok", METRIC_WEEKLY_PCT, 10.5, CONF_MEDIUM, "grok.labeled_text_b", "b 10%", now
+    )
+    merged = merge_readings([a, b])
+    assert len(merged) == 1
+    assert merged[0].confidence == CONF_MEDIUM
 
 
 def test_monotonic_guard_downgrades_unexplained_drop_but_keeps_with_past_reset():

@@ -486,6 +486,30 @@ def test_forecast_no_data_json_unaffected(monkeypatch, capsys):
     assert "no usage data yet" not in out  # json path never shows the hint
 
 
+def test_forecast_session_idle_with_prior_use_stays_idle(monkeypatch, capsys):
+    """Windows that are idle but have used>0 must not get first-run onboarding."""
+    from token_oracle.core.contracts import Forecast
+
+    idle_but_used = [
+        Forecast("5h", 12000, 220000, 5.0, None, 100.0, True, profile="default"),
+    ]
+    monkeypatch.setattr(cli_main, "run_forecast", lambda now, cfg: idle_but_used)
+    monkeypatch.setattr(cli_main, "_is_interactive", lambda: True)
+    fake_cfg = SimpleNamespace(profiles=None, source="generic", source_opts={})
+    monkeypatch.setattr(cli_main, "load_config", lambda p: fake_cfg)
+    rc = cli_main.main(["forecast", "--now", "1000"])
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    assert out == "idle"
+    assert "no usage data yet" not in out
+
+
+def test_first_run_hint_mentions_grok():
+    hint = cli_main._first_run_hint()
+    assert "Grok" in hint or "grok" in hint
+    assert "~/.grok/sessions" in hint
+
+
 # --- plan 044: SIGPIPE reset + subprocess no-traceback smoke ---
 
 

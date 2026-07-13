@@ -110,7 +110,12 @@ def readings_from_network_json(url: str, obj: dict, now: float) -> list[LiveRead
 def readings_from_progressbars(bars: list[dict], now: float) -> list[LiveReading]:
     """Bars collected from DOM: only emit when label matches known usage keywords."""
     readings: list[LiveReading] = []
-    label_re = re.compile(r"(?i)\b(grok\s*build|build|heavy|weekly|usage)\b")
+    # Require specific usage-cap labels. Bare "usage"/"build" match decoy chrome
+    # (sidebars, marketing) and were a residual fabrication channel after plan 031.
+    label_re = re.compile(
+        r"(?i)\b(grok\s*build|weekly(?:\s+supergrok)?(?:\s+heavy)?(?:\s+limit)?|"
+        r"heavy\s+limit|weekly\s+limit)\b"
+    )
     for b in bars or []:
         if not isinstance(b, dict):
             continue

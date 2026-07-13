@@ -83,9 +83,12 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
         # Pass full normalized events (model at idx 2) so model-filter windows work.
         # compute_window accepts either pairs or full events.
         f = compute_window(events, now, w, prof)
-        # For the 5h/current block on Claude, prefer server rate-limit data (exact website
-        # reset time + used%) when the overlay is present; otherwise fall back to local
-        # Claude engine. This makes the "resets in X minutes" relevant and not outdated.
+        # For the 5h/current block on Claude, prefer server rate-limit data for the
+        # *reset clock* and *used* fill when present. Do NOT write current-usage %
+        # into Forecast.projected_pct — that field is end-of-window projection
+        # (plan 030 semantics). Local projection stays; used is corrected from
+        # server fill so statusline k/cap stays honest. Display of live current %
+        # on the dash goes through LiveCell overlay, not this field.
         # Only apply for claude_code source (avoid polluting generic tests or non-claude profiles
         # that happen to name a window "5h").
         if (
@@ -97,9 +100,7 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
             if data:
                 if data.get("reset_in_secs") is not None:
                     object.__setattr__(f, "reset_in_secs", data["reset_in_secs"])
-                if data.get("projected_pct") is not None:
-                    object.__setattr__(f, "projected_pct", data["projected_pct"])
-                # Server % → compute used for display (local logs often undercount 5h)
+                # Server current fill → used only (never projected_pct).
                 if data.get("projected_pct") is not None and data.get("source") == "server":
                     object.__setattr__(f, "used", int(round(data["projected_pct"] / 100.0 * w.cap)))
             else:
@@ -173,8 +174,7 @@ def forecast(now, config=None):
                     if data:
                         if data.get("reset_in_secs") is not None:
                             object.__setattr__(f, "reset_in_secs", data["reset_in_secs"])
-                        if data.get("projected_pct") is not None:
-                            object.__setattr__(f, "projected_pct", data["projected_pct"])
+                        # Server current fill → used only (never projected_pct).
                         if data.get("projected_pct") is not None and data.get("source") == "server":
                             object.__setattr__(
                                 f, "used", int(round(data["projected_pct"] / 100.0 * w.cap))

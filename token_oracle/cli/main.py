@@ -81,12 +81,25 @@ def _first_run_hint():
         "token-oracle forecasts from your agent's local logs — there is nothing\n"
         "to forecast until some exist.\n"
         "  • Claude Code: use it once; logs appear under ~/.claude/projects/\n"
+        "  • Grok Build: use it once; sessions appear under ~/.grok/sessions/\n"
+        "  • set source in config if needed (claude_code | grok | generic)\n"
         "  • see what oracle found:   oracle doctor\n"
         "  • create a config:         oracle init\n"
         "  • turn on live web numbers: oracle live on   (then: oracle live-setup)\n"
         "\n"
         "docs: https://github.com/muslewski/token-oracle"
     )
+
+
+def _is_true_first_run(forecasts) -> bool:
+    """True only when there is no prior usage to show — not mere session-idle.
+
+    Empty render also happens when every window is currently `idle` after real
+    use; those users should see the stable `idle` token, not onboarding copy.
+    """
+    if not forecasts:
+        return True
+    return all(int(getattr(f, "used", 0) or 0) == 0 for f in forecasts)
 
 
 def _maybe_ingest_rate_limits() -> None:
@@ -147,7 +160,7 @@ def _doctor_lines(cfg, config_path, color, now):
                     f"profiles={len(cfg.profiles)} · {total_files} files, "
                     f"{total_evs} events, {age_str}"
                 ),
-                total_evs > 0 or True,
+                total_evs > 0,
             )
         else:
             src = get_source(cfg.source, cfg.source_opts)
@@ -217,19 +230,33 @@ def _doctor_lines(cfg, config_path, color, now):
     out.append(colors.dim(f"  {ok} ok · {bad} need attention", color))
     if multi:
         out.append(colors.dim("  multi mode: both Claude + Grok tracked together", color))
-    # show when we are using real cloud caps for claude (the actual source of truth)
+    # show when we are using real cloud caps for claude (only if not rejected)
     try:
         from token_oracle.core.config import load_claude_limits
 
         cl = load_claude_limits()
         if cl:
-            out.append(
-                colors.dim(
-                    "  limits   — real caps + weeklyResetAnchor from "
-                    "~/.claude/usage-limits.json (exact resets)",
-                    color,
-                )
+            # Cap rejection is recorded on cfg.issues — don't claim "exact" if so.
+            cap_rejected = any(
+                "external" in (iss or "").lower() and "rejected" in (iss or "").lower()
+                for iss in (cfg.issues or [])
             )
+            if cap_rejected:
+                out.append(
+                    colors.dim(
+                        "  limits   — ~/.claude/usage-limits.json present but "
+                        "values rejected (using presets; see issue rows)",
+                        color,
+                    )
+                )
+            else:
+                out.append(
+                    colors.dim(
+                        "  limits   — real caps + weeklyResetAnchor from "
+                        "~/.claude/usage-limits.json (exact resets)",
+                        color,
+                    )
+                )
     except Exception:
         pass
 
@@ -346,7 +373,6 @@ def _doctor_lines(cfg, config_path, color, now):
 
 
 def main(argv=None):
-    _reset_sigpipe()
     parser = argparse.ArgumentParser(
         prog="token-oracle",
         description=(
@@ -435,6 +461,10 @@ def main(argv=None):
                 help="emit machine-readable JSON instead of text",
             )
     args = parser.parse_args(argv)
+    # Dash needs Python BrokenPipeError so Painter can restore the TTY on pipe
+    # close. Every other command prefers quiet SIG_DFL death on early close.
+    if args.cmd != "dash":
+        _reset_sigpipe()
     cfg = load_config(args.config)
     now = _now(args)
 
@@ -473,10 +503,10 @@ def main(argv=None):
         else:
             out = sl.render(fs)
             if not out:
-                # No data. A human at a terminal gets guidance; everything
-                # non-interactive (pipes, status bars, scripts) keeps the
-                # stable "idle" token it has always emitted.
-                if _is_interactive():
+                # Empty render: either true first-run (no usage ever) or all
+                # windows currently idle after real use. Only the former gets
+                # onboarding on a TTY; session-idle keeps the stable "idle" token.
+                if _is_interactive() and _is_true_first_run(fs):
                     print(_first_run_hint())
                     return 0
                 out = "idle"

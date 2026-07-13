@@ -10,13 +10,29 @@ from ..core.timeutil import parse_ts
 from .base import register
 
 
+def _as_int(val, default=0):
+    """Coerce usage field to int; non-numeric → default (skip bad fields, not whole file)."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return default
+    if isinstance(val, int):
+        return val
+    if isinstance(val, float):
+        return int(val)
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
+
+
 def _limit_tokens(usage):
     if not usage:
         return 0
     return (
-        usage.get("input_tokens", 0)
-        + usage.get("output_tokens", 0)
-        + usage.get("cache_creation_input_tokens", 0)
+        _as_int(usage.get("input_tokens", 0))
+        + _as_int(usage.get("output_tokens", 0))
+        + _as_int(usage.get("cache_creation_input_tokens", 0))
     )
 
 
@@ -52,11 +68,16 @@ def iter_usage_events(jsonl_path):
             tok = _limit_tokens(usage)
             if tok > 0:
                 model = msg.get("model")
-                inp = usage.get("input_tokens", 0)
-                out = usage.get("output_tokens", 0)
-                cc = usage.get("cache_creation_input_tokens", 0)
-                cr = usage.get("cache_read_input_tokens", 0)
+                inp = _as_int(usage.get("input_tokens", 0))
+                out = _as_int(usage.get("output_tokens", 0))
+                cc = _as_int(usage.get("cache_creation_input_tokens", 0))
+                cr = _as_int(usage.get("cache_read_input_tokens", 0))
                 cost = obj.get("costUSD")
+                if cost is not None and not isinstance(cost, (int, float)):
+                    try:
+                        cost = float(cost)
+                    except (TypeError, ValueError):
+                        cost = None
                 yield (ts, tok, model, inp, out, cc, cr, cost)
 
 

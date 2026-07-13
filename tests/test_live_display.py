@@ -121,6 +121,12 @@ def test_virtual_display_no_stdout(monkeypatch, capsys):
         def terminate(self):
             pass
 
+        def wait(self, timeout=None):
+            return 0
+
+        def kill(self):
+            pass
+
     def fake_popen(*a, **k):
         return FakeProc()
 
@@ -132,5 +138,5 @@ def test_virtual_display_no_stdout(monkeypatch, capsys):
 
     captured = capsys.readouterr()
     assert captured.out == ""
-    # The message (if emitted) went to stderr via _emit
-    assert "virtual display" in (captured.err or "") or True  # may be captured by pytest too
+    # Progress must land on stderr (RC-C), never stdout.
+    assert "virtual display" in (captured.err or "")

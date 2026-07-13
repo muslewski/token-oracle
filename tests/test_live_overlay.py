@@ -247,6 +247,19 @@ def test_reading_at_full_probe_interval_still_applied():
 # --- header weekly (self-ingested rate limit) tests (plan 054) ---
 
 
+def test_header_weekly_with_none_or_empty_snapshot():
+    """Header weekly must work without a live-web snapshot (statusline-only users)."""
+    now = time.time()
+    hdr = {"used_percentage": 41.0, "observed_at": now - 2, "stale": False}
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
+    for snap in (None, {}, {"providers": None}):
+        cells = overlay_cells(fs, snap, now, weekly_header=hdr)
+        cell = cells.get(("claude", "weekly"))
+        assert cell is not None, f"snap={snap!r} dropped header weekly"
+        assert cell.pct == 41.0
+        assert cell.extractor == "header"
+
+
 def test_header_weekly_becomes_live_cell():
     now = time.time()
     hdr = {"used_percentage": 33.0, "observed_at": now - 5, "stale": False}

@@ -185,3 +185,23 @@ def test_scan_survives_malformed_line(tmp_path):
     src = get_source("claude_code", {"projects_dir": str(tmp_path / "projects")})
     files, events = src.scan({}, now=7200.0, window=7200.0)
     assert events == [(3600.0, 100, "claude-sonnet-4-5", 100, 0, 0, 0, None)]
+
+
+def test_non_numeric_usage_fields_skipped_not_crash(tmp_path):
+    """Non-numeric token fields must not abort the file (F-A7-1)."""
+    from token_oracle.sources.claude_code import iter_usage_events
+
+    pth = tmp_path / "a.jsonl"
+    # one bad usage line + one good
+    pth.write_text(
+        '{"timestamp":"2026-01-01T00:00:00Z","message":{"model":"x","usage":'
+        '{"input_tokens":"n/a","output_tokens":1}},"type":"assistant"}\n'
+        '{"timestamp":"2026-01-01T00:00:01Z","message":{"model":"x","usage":'
+        '{"input_tokens":100,"output_tokens":50,"cache_creation_input_tokens":0}},'
+        '"type":"assistant"}\n',
+        encoding="utf-8",
+    )
+    evs = list(iter_usage_events(str(pth)))
+    # bad line: _limit_tokens treats n/a as 0 + 1 = 1 > 0 so it may emit with inp=0
+    # good line always emits
+    assert any(e[1] >= 150 for e in evs)

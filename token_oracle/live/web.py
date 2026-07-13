@@ -224,6 +224,14 @@ def virtual_display(progress=None):
         if proc is not None:
             try:
                 proc.terminate()
+                try:
+                    proc.wait(timeout=2)
+                except Exception:
+                    try:
+                        proc.kill()
+                        proc.wait(timeout=1)
+                    except Exception:
+                        pass
             except Exception:
                 pass
         # RC-A: restore DISPLAY to its prior value (unset if it was unset),
@@ -773,7 +781,8 @@ def fetch_claude_live_usage(
   document.querySelectorAll(csel).forEach(el => {
     const t = (el.innerText || el.textContent || '').trim() \
 .replace(/\\s+/g, ' ').slice(0, 300);
-    if (t && /(current\\s*session|session|5.?h|5-hour)/i.test(t)) {
+    // Require current session / 5h — bare "session" matches too much page chrome.
+    if (t && /(current\\s*session|5.?h|5-hour)/i.test(t)) {
       const k = t.slice(0, 80);
       if (!seen.has(k)) {
         seen.add(k);
@@ -908,6 +917,15 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
     # Use the shared virtual_display CM (RC-C: no stdout print; RC-A: restores DISPLAY on exit).
     # For login (one-shot interactive) we still wrap so teardown is guaranteed.
     with virtual_display() as _disp:
+        # Headed login needs a real or virtual display. Do not launch Chromium
+        # onto a dead DISPLAY (RC-D honesty for live-setup).
+        has_real = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+        if not headless and not _disp and not has_real:
+            print(
+                "✗ No display available for headed login "
+                "(install Xvfb or run with a graphical session)."
+            )
+            return False
         # Default to Playwright's own bundled Chromium. It is the most reliable.
         # System Chrome often crashes on Linux (VAAPI, GTK modules, library mismatches).
         # Set TOKEN_ORACLE_USE_SYSTEM_BROWSER=1 if you want to experiment
@@ -936,9 +954,10 @@ def launch_login_session(provider: str = "grok", headless: bool = False) -> bool
                 context = p.chromium.launch_persistent_context(profile_dir, **launch_kwargs)
                 page = context.new_page()
 
-                # Go straight to the usage page so the user can verify the numbers immediately
+                # Go straight to the usage surface so the user can verify numbers.
+                # Grok: weekly cap is the ?_s=usage modal (settings/usage bounces to chat).
                 usage_url = (
-                    "https://grok.com/settings/usage"
+                    "https://grok.com/?_s=usage"
                     if provider.lower().startswith("grok")
                     else "https://claude.ai/settings/usage"
                 )

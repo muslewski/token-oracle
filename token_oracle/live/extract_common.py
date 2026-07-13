@@ -53,6 +53,26 @@ def _make_reading(
     )
 
 
+def _extractor_trust(extractor: str) -> int:
+    """Higher = more authoritative. Modal text beats DOM heuristics.
+
+    On conflict we keep the higher-trust reading instead of poisoning both to
+    CONF_LOW (which hid a correct modal weekly behind a decoy progressbar).
+    """
+    ex = (extractor or "").lower()
+    if "usage_modal" in ex or "modal" in ex:
+        return 100
+    if "network" in ex or "exact" in ex or "json" in ex:
+        return 60
+    if "progressbar" in ex or "aria" in ex:
+        return 30
+    if "labeled" in ex or "text" in ex:
+        return 20
+    if "header" in ex:
+        return 90
+    return 10
+
+
 def merge_readings(readings: list[LiveReading]) -> list[LiveReading]:
     """Agreement/conflict policy; dedupe identical (metric, extractor)."""
     if not readings:
@@ -87,8 +107,13 @@ def merge_readings(readings: list[LiveReading]) -> list[LiveReading]:
                 va = float(a.value) if a.value is not None else 0.0
                 vb = float(b.value) if b.value is not None else 0.0
                 if abs(va - vb) <= 1.0:
-                    # agree within 1pt: keep higher-conf, upgrade to high
-                    if a.confidence == CONF_HIGH:
+                    # agree within 1pt: keep higher-trust, then higher-conf
+                    # Only upgrade to HIGH if at least one was already HIGH
+                    # (two MEDIUM text scrapes agreeing is not structured evidence).
+                    ta, tb = _extractor_trust(a.extractor), _extractor_trust(b.extractor)
+                    if ta != tb:
+                        winner = a if ta > tb else b
+                    elif a.confidence == CONF_HIGH:
                         winner = a
                     elif b.confidence == CONF_HIGH:
                         winner = b
@@ -96,11 +121,16 @@ def merge_readings(readings: list[LiveReading]) -> list[LiveReading]:
                         ca = 2 if a.confidence == CONF_MEDIUM else 1
                         cb = 2 if b.confidence == CONF_MEDIUM else 1
                         winner = a if ca >= cb else b
+                    conf = (
+                        CONF_HIGH
+                        if (a.confidence == CONF_HIGH or b.confidence == CONF_HIGH)
+                        else winner.confidence
+                    )
                     up = LiveReading(
                         provider=winner.provider,
                         metric=winner.metric,
                         value=winner.value,
-                        confidence=CONF_HIGH,
+                        confidence=conf,
                         extractor=winner.extractor,
                         evidence=winner.evidence,
                         fetched_at=winner.fetched_at,
@@ -111,7 +141,6 @@ def merge_readings(readings: list[LiveReading]) -> list[LiveReading]:
                 else:
                     any_conflict = True
 
-                    # downgrade pair
                     def _downgrade(r: LiveReading, other: LiveReading) -> LiveReading:
                         ev = r.evidence
                         suffix = f"; conflicts with {other.extractor} {other.value}"
@@ -128,29 +157,54 @@ def merge_readings(readings: list[LiveReading]) -> list[LiveReading]:
                             model=r.model,
                         )
 
-                    ka = _downgrade(a, b)
-                    kb = _downgrade(b, a)
-                    if ka not in kept:
-                        kept.append(ka)
-                    if kb not in kept:
-                        kept.append(kb)
+                    # Prefer higher-trust extractor; keep its confidence. Only
+                    # dual-LOW when trust ties (ambiguous competing sources).
+                    ta, tb = _extractor_trust(a.extractor), _extractor_trust(b.extractor)
+                    if ta > tb:
+                        if a not in kept:
+                            kept.append(a)
+                        kd = _downgrade(b, a)
+                        if kd not in kept:
+                            kept.append(kd)
+                    elif tb > ta:
+                        if b not in kept:
+                            kept.append(b)
+                        kd = _downgrade(a, b)
+                        if kd not in kept:
+                            kept.append(kd)
+                    else:
+                        ka = _downgrade(a, b)
+                        kb = _downgrade(b, a)
+                        if ka not in kept:
+                            kept.append(ka)
+                        if kb not in kept:
+                            kept.append(kb)
         if not any_conflict:
-            # no conflicts seen: pick best single upgraded
+            # no conflicts: pick best by trust then confidence; upgrade to HIGH
+            # only if a HIGH source already exists among candidates.
             best = None
             for r in lst:
-                if best is None or (r.confidence == CONF_HIGH and best.confidence != CONF_HIGH):
+                if best is None:
                     best = r
-                elif r.confidence == CONF_MEDIUM and best.confidence not in (
-                    CONF_HIGH,
-                    CONF_MEDIUM,
-                ):
+                    continue
+                tr, tb = _extractor_trust(r.extractor), _extractor_trust(best.extractor)
+                if tr > tb:
                     best = r
+                elif tr == tb:
+                    if r.confidence == CONF_HIGH and best.confidence != CONF_HIGH:
+                        best = r
+                    elif r.confidence == CONF_MEDIUM and best.confidence not in (
+                        CONF_HIGH,
+                        CONF_MEDIUM,
+                    ):
+                        best = r
             if best is not None:
+                any_high = any(r.confidence == CONF_HIGH for r in lst)
                 up = LiveReading(
                     provider=best.provider,
                     metric=best.metric,
                     value=best.value,
-                    confidence=CONF_HIGH,
+                    confidence=CONF_HIGH if any_high else best.confidence,
                     extractor=best.extractor,
                     evidence=best.evidence,
                     fetched_at=best.fetched_at,

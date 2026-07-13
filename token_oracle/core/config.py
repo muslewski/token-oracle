@@ -40,14 +40,20 @@ def try_get_claude_five_hour_remaining(now: float | None = None) -> float | None
         now = _t.time()
 
     # Own ingested header (works for any user who wires `oracle statusline`).
+    # Use last known server value if we have a reasonably recent ingest, even if
+    # the internal view marks the window "stale" (e.g. at exact roll boundary).
+    # This keeps the tmux/status bar numbers stable on the server truth instead
+    # of flipping to local event sums.
     try:
         from . import ratelimits as _own_rl
 
         d = _own_rl.five_hour(now)
-        if d and isinstance(d, dict) and not d.get("stale", False):
-            rem = d.get("secs_to_reset")
-            if rem is not None:
-                return float(rem)
+        if d and isinstance(d, dict):
+            obs = d.get("observed_at")
+            if obs is not None and (now - float(obs) < 600):  # last 10 min
+                rem = d.get("secs_to_reset")
+                if rem is not None:
+                    return float(rem)
     except Exception:
         pass
 
@@ -124,19 +130,25 @@ def try_get_claude_five_hour_data(now: float | None = None):
         now = _t.time()
 
     # Own ingested header (works for any user who wires `oracle statusline`).
+    # Use last known server value if we have a reasonably recent ingest (see
+    # comment in try_get_claude_five_hour_remaining). This makes the 5h "used"
+    # and % shown in `oracle tmux` / forecast stable on the server bucket fill
+    # instead of oscillating with local event sums or re-anchoring.
     try:
         from . import ratelimits as _own_rl
 
         d = _own_rl.five_hour(now)
-        if d and isinstance(d, dict) and not d.get("stale", False):
-            rem = d.get("secs_to_reset")
-            sp = d.get("used_percentage")
-            if rem is not None:
-                return {
-                    "reset_in_secs": float(rem),
-                    "projected_pct": float(sp) if sp is not None else None,
-                    "source": "server",
-                }
+        if d and isinstance(d, dict):
+            obs = d.get("observed_at")
+            if obs is not None and (now - float(obs) < 600):
+                rem = d.get("secs_to_reset")
+                sp = d.get("used_percentage")
+                if rem is not None:
+                    return {
+                        "reset_in_secs": float(rem),
+                        "projected_pct": float(sp) if sp is not None else None,
+                        "source": "server",
+                    }
     except Exception:
         pass
 
@@ -405,6 +417,11 @@ def load_config(path: str | None = None) -> "Config":
                 loaded = json.load(fh)
             if isinstance(loaded, dict):
                 data = loaded
+            else:
+                issues.append(
+                    f"config file {path} is not a JSON object "
+                    f"(got {type(loaded).__name__}) — using built-in max20 preset"
+                )
         except (OSError, ValueError):
             issues.append(
                 f"config file {path} is unreadable or not valid JSON — using built-in max20 preset"

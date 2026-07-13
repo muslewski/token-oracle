@@ -238,9 +238,13 @@ never fabricates a number.
   logged-in session; it does not spoof fingerprints or solve CAPTCHAs. If a site
   serves a bot challenge it reports that state and suggests
   `TOKEN_ORACLE_LIVE_HEADED=1 oracle live-probe`.
-- Grok exposes no weekly-usage page, so grok's truthful live state is often
-  `rate_data_only` (rate-limit window only) — that is expected, not a bug.
-- Live numbers are display-only; they never alter the offline forecast math.
+- Grok weekly usage is on the `?_s=usage` modal (`https://grok.com/?_s=usage`),
+  not `/settings/usage` (that route bounces to chat). When only the 2h rate
+  window is available the state is `rate_data_only` — that is expected until a
+  headed probe captures the modal.
+- Live numbers are display-only on the dash overlay path; they never rewrite
+  offline projection math in the pure engine. (Statusline/forecast may prefer
+  self-ingested Claude rate-limit headers for the 5h window — see below.)
 
 ---
 

@@ -410,9 +410,11 @@ def test_bars_height_matches_fill():
         assert "claude" in "\n".join(frame).lower()
         assert "fable" in "\n".join(frame).lower()
         assert "5h" in "\n".join(frame)
-        # count the actual panel lines by scanning for the provider headers in render
-        # for contract: the ph is authoritative; just ensure no crash and fits
-        assert ph2 > 0
+        # Constructed bars height: per profile (header + one row per window + gap)
+        expected = sum(1 + len(gfs) + 1 for gfs in groups.values())
+        assert ph2 == expected, f"W={W} panel_height={ph2} expected={expected}"
+        for line in frame:
+            assert display_width(line) <= W, f"W={W} overflow: {line!r}"
 
 
 def test_bars_show_all_windows_labeled():
@@ -431,3 +433,34 @@ def test_bars_show_all_windows_labeled():
     # fable block
     assert "fable" in s.lower()
     assert "5h" in s
+
+
+def test_short_narrow_keeps_bars():
+    """At bars width + short height, sliders must not fall to compact text (F-A11-1)."""
+    fs = [
+        Forecast("5h", 20, 1000, 2.0, None, 3600.0, False, profile="claude"),
+        Forecast("weekly", 330, 1000, 33.0, None, 400000.0, False, profile="claude"),
+        Forecast("5h", 990, 1000, 99.0, None, 3600.0, False, profile="fable"),
+    ]
+    # bars band width; height that fits header+bars but not full chrome
+    frame = render_frame(fs, now=100000.0, color=False, size=os.terminal_size((24, 11)))
+    plain = "\n".join(frame)
+    # bars rows use label + % ; compact uses "·" separators heavily
+    assert "5h" in plain and "%" in plain
+    # binding survives
+    assert "99" in plain
+
+
+def test_tiny_chip_shows_binding_not_only_5h():
+    """At height=2 (tiny), chip should prefer highest % window (F-A11-3)."""
+    from token_oracle.live.contract import STATE_OK
+    from token_oracle.live.overlay import LiveCell
+
+    fs = [
+        Forecast("5h", 20, 1000, 2.0, None, 3600.0, False, profile="claude"),
+        Forecast("weekly", 990, 1000, 99.0, None, 400000.0, False, profile="claude"),
+    ]
+    cells = {("claude", "weekly"): LiveCell(99.0, STATE_OK, 1.0, "e", "header", None)}
+    frame = render_frame(fs, now=100000.0, color=False, cells=cells, size=os.terminal_size((80, 2)))
+    plain = "\n".join(frame)
+    assert "99%" in plain or "99" in plain

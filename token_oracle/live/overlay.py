@@ -82,16 +82,21 @@ def overlay_cells(
     Rate readings are never mapped into cells.
     """
     cells: dict[tuple[str, str], LiveCell] = {}
-    if not snapshot or not isinstance(snapshot, dict):
-        return cells
-
-    provs = snapshot.get("providers") or {}
+    # Web readings need a dict snapshot; header weekly must still apply when the
+    # live-web snapshot is missing (None) or empty ({}) — statusline-only users
+    # never have a browser snapshot but still ingest rate_limits headers.
+    snap = snapshot if isinstance(snapshot, dict) else {}
+    provs = snap.get("providers") or {}
     for p_raw, pdata in provs.items():
+        if not isinstance(pdata, dict):
+            continue
         p_c = _canon(p_raw)
         pfetched = pdata.get("fetched_at")
         pstate = pdata.get("state") or STATE_UNAVAILABLE
 
         for r in pdata.get("readings") or []:
+            if not isinstance(r, dict):
+                continue
             metric = r.get("metric")
             conf = r.get("confidence")
             val = r.get("value")
@@ -146,6 +151,7 @@ def overlay_cells(
 
     # Header weekly override for claude (from self-ingested rate_limits via 053).
     # Wins over any web scrape cell when fresh + non-stale. No-op otherwise (additive).
+    # Runs even when snap is empty so weekly live works without browser probing.
     hdr = _read_claude_weekly_header(now) if weekly_header is _AUTO else weekly_header
     if isinstance(hdr, dict):
         up = hdr.get("used_percentage")

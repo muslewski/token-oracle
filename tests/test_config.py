@@ -373,3 +373,14 @@ def test_five_hour_data_prefers_own_snapshot(monkeypatch, tmp_path):
     assert d["source"] == "server"
     assert d["projected_pct"] == 42.0
     assert "reset_in_secs" in d
+
+
+def test_non_object_json_config_records_issue(tmp_path, monkeypatch):
+    """JSON array/string configs must not silently fall through to max20."""
+    cfg_path = tmp_path / "config.json"
+    cfg_path.write_text("[]\n", encoding="utf-8")
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    from token_oracle.core.config import load_config
+
+    c = load_config(str(cfg_path))
+    assert any("not a JSON object" in i for i in c.issues)

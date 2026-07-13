@@ -547,11 +547,24 @@ def render_frame(
             live_c = next((cc for cc in cs if getattr(cc, "pct", None) is not None), None)
             stt = getattr(cs[0], "state", STATE_UNAVAILABLE) if cs else STATE_UNAVAILABLE
             if live_c is not None:
-                # glance chip stays clean + symmetric across providers: no age here
-                # (precise per-row age lives in the panel provenance). Prefer the
-                # local 5h number when the provider has one, else the web cap.
-                l5 = local_5h_by.get(pc)
-                pct = int(round(l5)) if l5 is not None else int(live_c.pct)
+                # Binding-first chip: show the highest local window % for this
+                # provider (not just 5h), so short "tiny" terminals keep the
+                # number closest to cap. Fall back to live cell, then local 5h.
+                local_max = None
+                for pn, pfs in (groups or {}).items():
+                    pcan = "grok" if "grok" in pn.lower() else "claude"
+                    if pcan != pc:
+                        continue
+                    for ff in pfs:
+                        if getattr(ff, "idle", False) or not getattr(ff, "cap", 0):
+                            continue
+                        p = 100.0 * ff.used / ff.cap
+                        local_max = p if local_max is None else max(local_max, p)
+                if local_max is not None:
+                    pct = int(round(local_max))
+                else:
+                    l5 = local_5h_by.get(pc)
+                    pct = int(round(l5)) if l5 is not None else int(live_c.pct)
                 chips.append(f"{pc} ● live {pct}%")
             elif stt == STATE_RATE_DATA_ONLY:
                 ri = rinfo.get(pc, {})
@@ -715,6 +728,13 @@ def render_frame(
                 Region("panels", panel_height(groups, 0, arrange_w), lambda: panels_fill(0)),
                 Region("footer", FOOTER_H, footer_fill),
             ]
+        if level == "bars_only":
+            # Narrow bars without alert/activity/footer — keeps sliders when
+            # short×narrow would otherwise fall through to compact text.
+            return [
+                Region("header", HEADER_H, header_fill),
+                Region("panels", panel_height(groups, 0, arrange_w), lambda: panels_fill(0)),
+            ]
         if level == "oneline":
             clines = compact_fill()
             return [
@@ -727,7 +747,14 @@ def render_frame(
         return [Region("header", HEADER_H, header_fill)]  # tiny
 
     avail_h = int(getattr(size, "lines", 0) or 0) if size is not None else 0
-    for level in ("full", "meta", "heads", "oneline", "tiny", "glance"):
+    arrange_mode, _, _ = _panels_arrangement(groups, arrange_w)
+    # When width is in the bars band, try bars_only before compact text so short
+    # terminals keep sliders (F-A11-1).
+    if arrange_mode == "bars":
+        ladder = ("full", "meta", "heads", "bars_only", "oneline", "tiny", "glance")
+    else:
+        ladder = ("full", "meta", "heads", "oneline", "tiny", "glance")
+    for level in ladder:
         regs = _regions_for(level)
         total = sum(r.height for r in regs)
         if avail_h == 0 or total <= avail_h:

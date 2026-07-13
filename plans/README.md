@@ -408,3 +408,67 @@ From the 2026-07-10 live-truthfulness round:
 - **Fixing the 5h "starts when a message is sent" via whole-page text probe**: rejected — chat content can contain those words; the state is only trusted when extracted from the session row itself (plan 032).
 
 Audit scope caveats (from the audit report): runtime behavior was not executed locally (no pytest env on the advisor machine — CI was green at `d2b4d32`); the published PyPI artifact was not inspected; the `max20` preset numbers (220k / 8M) cannot be verified against Anthropic's real limits offline.
+
+---
+
+## Quality pass 2026-07-13 (Grok 4.5) — DONE plan revision
+
+**Design:** `docs/superpowers/specs/2026-07-13-quality-pass-done-plans-design.md`  
+**Baseline HEAD:** `b5092bc`  
+**Method:** audit-first clusters → delta fix plans `061+` → re-audit (max 2 loops).  
+**Does not re-implement TODO plans.** Keeps merged progress; fixes fidelity/quality gaps only.
+
+### Status legend
+
+| Tag | Meaning |
+|-----|---------|
+| QP-PASS | Clean against plan intent + tests |
+| QP-FIX | Gap confirmed; fix plan in flight |
+| QP-FIXED | Fix merged + re-verified |
+| QP-ACCEPT | Known gap, accepted with reason |
+| QP-SUPERSEDED | Later plan replaced this behavior |
+
+### Per-plan quality status (Wave 1 complete + Wave 2 HIGH fixes)
+
+See `plans/061-quality-pass-wave1-findings.md` for full findings + residual MED.
+
+| Plan | Cluster | QP status | Notes |
+|------|---------|-----------|-------|
+| 001 | A1 | QP-FIX residual | non-object JSON silent ignore (MED F-A1-2) |
+| 002 | A2 | QP-PASS | docs residual: AGENTS test count, README omits live* |
+| 003 | A1 | QP-FIXED | multi doctor `or True` bug fixed |
+| 004 | A1 | QP-PASS | atomic writes OK |
+| 005 | A2 | QP-PASS | characterization pins present |
+| 006 | A2 | QP-PASS | dead API still gone |
+| 007 | A6 | QP-PASS | portable clear OK |
+| 008 | A1 | QP-PASS | init/clean OK |
+| 016 | A3 | QP-PASS | 8-field events end-to-end |
+| 017 | A3 | QP-PASS | pricing pure; product wire = 058+ |
+| 030 | A4 | QP-FIXED | engine no longer writes current% into projected_pct |
+| 031 | A5 | QP-FIXED | progressbar + merge trust fixes |
+| 032 | A5 | QP-FIX residual | bare `session` collector (MED) |
+| 033 | A4 | QP-PASS | probe orchestration OK |
+| 034 | A6 | QP-PASS | fixed-region scene OK |
+| 035 | A6 | QP-FIXED | Xvfb wait/kill; residual login/display tests |
+| 036 | A4 | QP-PASS | live toggle OK |
+| 037 | A5 | QP-FIX residual | multi-meter split → MEDIUM on dash |
+| 038 | A5 | QP-FIXED | live-setup URL + modal prefer on conflict |
+| 039 | A7 | QP-PASS | cap validation OK; doctor footer residual |
+| 040 | A5 | QP-PASS | used+limit hole closed |
+| 041 | A7 | QP-FIX residual | non-numeric usage fields (MED) |
+| 042 | A8 | QP-PASS | help OK |
+| 043 | A8 | QP-FIXED | first-run vs session-idle + Grok copy |
+| 044 | A8 | QP-FIXED | SETUP Grok note; SIGPIPE TTY residual |
+| 045 | A9 | QP-PASS | demo GIF OK |
+| 046 | A9 | QP-PASS | npm shim safe |
+| 047 | A9 | QP-PASS | install.sh safe |
+| 049 | A9 | QP-PASS | README install channels OK |
+| 051 | A7 | QP-PASS | hermetic fallback test OK |
+| 052 | A10 | QP-PASS | width responsive; weak size=None test residual |
+| 053 | A12 | QP-PASS | self-ingest 5h OK |
+| 054 | A12 | QP-FIXED | empty snapshot no longer drops header weekly |
+| 055 | A10 | QP-PASS | color-preserving truncate OK |
+| 056 | A11 | QP-FIX residual | short height loses binding (MED) |
+| 057 | A11 | QP-FIX residual | short×narrow drops bars; height assert tightened |
+
+**Waves 2+3 shipped:** HIGH + most MED residuals fixed; **291 tests** green. Details in `plans/061-quality-pass-wave1-findings.md`.
