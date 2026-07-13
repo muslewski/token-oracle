@@ -73,6 +73,35 @@ def _profile_icon(profile):
     return c.M_ORACLE
 
 
+def _fit_join(prefix: str, items: list[str], width: int, sep: str = " · ") -> str:
+    """Return `prefix` + as many `items` (in order) as fit within `width` display
+    cells, joined by `sep`. Never emits a trailing separator; never exceeds
+    `width`. `prefix` and `items` may already contain ANSI (measured by
+    display_width). If not even the first item fits after the prefix, returns the
+    first (binding) item alone so the most-important number always survives at
+    widths >= ~10 cells (caller orders items[0] as highest %)."""
+    from ..cli.colors import display_width
+
+    if not items:
+        return prefix
+    out = prefix
+    used = display_width(prefix)
+    first = True
+    for it in items:
+        add = (0 if first else display_width(sep)) + display_width(it)
+        if used + add > width:
+            break
+        out = out + ("" if first else sep) + it
+        used += add
+        first = False
+    if first and items:
+        # prefix too wide to leave room for binding item; emit just the binding
+        # item (ensures e.g. '99% fable' appears even when '✳ claude  ' prefix
+        # would overflow a ~12-cell terminal)
+        return items[0]
+    return out
+
+
 def _fmt_reset_abs(reset_in, now):
     # Use friendly format: minutes first, proper d/h for long (no 156:00)
     return fmt_reset(reset_in)
@@ -140,15 +169,12 @@ def panel_height(groups: dict, detail: int = 2, w: int = 999) -> int:
     return total
 
 
-def _compact_profile_line(pname, forecasts, now, enabled, cells=None) -> str:
-    """One-line summary for a profile (used when the terminal is too short for
-    boxes): icon + name + each active window's freshest %. 5h uses local
-    real-time usage; caps use the web cell when present, else local projection."""
+def _compact_profile_line(pname, forecasts, now, enabled, cells=None, width=80) -> str:
     cells = cells or {}
     p_canon = "grok" if "grok" in pname.lower() else "claude"
     icon = _profile_icon(pname)
-    parts: list[str] = []
-    for f in sorted(forecasts, key=lambda x: x.window):
+    rows = []  # (pct, short)
+    for f in forecasts:
         ww = (f.window or "").lower()
         if bool(getattr(f, "idle", False)):
             continue
@@ -161,9 +187,17 @@ def _compact_profile_line(pname, forecasts, now, enabled, cells=None) -> str:
             cell = cells.get((p_canon, wkey)) if wkey else None
             pct = cell.pct if (cell and cell.pct is not None) else f.projected_pct
             short = "wk" if ww in ("weekly", "week") else (ww or "?")
-        parts.append(f"{short} {round(pct)}%")
-    body = " · ".join(parts) if parts else "no active windows"
-    return c.dim(f"{icon} {pname.lower()}  {body}", enabled)
+        rows.append((float(pct), short))
+    prefix = c.dim(f"{icon} {pname.lower()}  ", enabled)
+    if not rows:
+        return c.dim(f"{icon} {pname.lower()}  idle", enabled)
+    rows.sort(key=lambda r: r[0], reverse=True)  # binding (highest %) first
+    items = []
+    for i, (pct, short) in enumerate(rows):
+        text = f"{round(pct)}% {short}"
+        # make the single most-critical item pop with its gauge color
+        items.append(c.gauge(text, pct, enabled) if i == 0 else c.dim(text, enabled))
+    return _fit_join(prefix, items, width)
 
 
 def _row_glyph(cell, is_idle: bool) -> str:
@@ -548,7 +582,42 @@ def render_frame(
     def compact_fill() -> list[str]:
         if not groups:
             return [c.dim("(no data)", enabled)]
-        return [_compact_profile_line(pn, groups[pn], now, enabled, cells) for pn in sorted(groups)]
+        clines = [
+            _compact_profile_line(pn, groups[pn], now, enabled, cells, w) for pn in sorted(groups)
+        ]
+        return clines
+
+    def glance_fill() -> list[str]:
+        if not groups:
+            return [c.dim(f"{c.M_ORACLE} token-oracle  (no data)", enabled)]
+        scored = []  # (pct, rendered) — pct-first text so the % survives truncation
+        for pn in sorted(groups):
+            best = None  # (pct, short)
+            p_canon = "grok" if "grok" in pn.lower() else "claude"
+            for f in groups[pn]:
+                if bool(getattr(f, "idle", False)):
+                    continue
+                ww = (f.window or "").lower()
+                if "5h" in ww or "session" in ww or "current" in ww:
+                    pct = (100.0 * f.used / f.cap) if getattr(f, "cap", 0) else 0.0
+                    short = "5h"
+                else:
+                    wkey = (
+                        "weekly"
+                        if ww in ("weekly", "week")
+                        else ("fable" if ww == "fable" else None)
+                    )
+                    cell = (cells or {}).get((p_canon, wkey)) if wkey else None
+                    pct = cell.pct if (cell and cell.pct is not None) else f.projected_pct
+                    short = "wk" if ww in ("weekly", "week") else (ww or "?")
+                if best is None or float(pct) > best[0]:
+                    best = (float(pct), short)
+            if best is not None:
+                scored.append((best[0], c.gauge(f"{round(best[0])}% {best[1]}", best[0], enabled)))
+        scored.sort(key=lambda t: t[0], reverse=True)  # binding (highest %) first
+        items = [rendered for _, rendered in scored]
+        prefix = c.violet(f"{c.M_ORACLE} ", enabled)
+        return [_fit_join(prefix, items, w)]
 
     def activity_fill() -> list[str]:
         log = list(probe_log or [])[:3]
@@ -571,6 +640,7 @@ def render_frame(
     #   heads   header+alert+panels(1/row)+footer            (key % rows only)
     #   oneline header+alert+one compact line per profile    (no boxes)
     #   tiny    header only (title + live summary chip)
+    #   glance  single-line 🔮 worst-per-provider floor      (when < HEADER_H rows)
     def _regions_for(level: str) -> list["Region"]:
         if level == "full":
             return [
@@ -601,10 +671,12 @@ def render_frame(
                 Region("alert", ALERT_H, alert_fill),
                 Region("compact", len(clines), lambda: clines),
             ]
+        if level == "glance":
+            return [Region("glance", 1, glance_fill)]
         return [Region("header", HEADER_H, header_fill)]  # tiny
 
     avail_h = int(getattr(size, "lines", 0) or 0) if size is not None else 0
-    for level in ("full", "meta", "heads", "oneline", "tiny"):
+    for level in ("full", "meta", "heads", "oneline", "tiny", "glance"):
         regs = _regions_for(level)
         total = sum(r.height for r in regs)
         if avail_h == 0 or total <= avail_h:
