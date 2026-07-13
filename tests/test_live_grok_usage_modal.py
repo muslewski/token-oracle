@@ -106,6 +106,6 @@ def test_overlay_maps_weekly_and_grok_build_cells():
             }
         }
     }
-    cells = overlay_cells([], snapshot, now=NOW)
+    cells = overlay_cells([], snapshot, now=NOW, weekly_header=None)
     assert cells[("grok", "weekly")].pct == 23.0
     assert cells[("grok", "grok_build")].pct == 22.0

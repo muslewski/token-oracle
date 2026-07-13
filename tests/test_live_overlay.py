@@ -8,6 +8,7 @@ from token_oracle.live.contract import (
     METRIC_RATE_WINDOW,
     METRIC_WEEKLY_PCT,
     STATE_AUTH_NO_DATA,
+    STATE_OK,
     STATE_STALE,
     LiveReading,
     ProviderLive,
@@ -39,7 +40,7 @@ def test_overlay_high_conf_fresh_sets_pct():
         },
     }
     fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
-    cells = overlay_cells(fs, snap, now, ttl=FRESH_TTL_SECS)
+    cells = overlay_cells(fs, snap, now, ttl=FRESH_TTL_SECS, weekly_header=None)
     cell = cells.get(("claude", "weekly"))
     assert cell is not None
     assert cell.pct == 38.0
@@ -70,7 +71,7 @@ def test_overlay_low_conf_withholds_pct():
         },
     }
     fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
-    cells = overlay_cells(fs, snap, now)
+    cells = overlay_cells(fs, snap, now, weekly_header=None)
     cell = cells.get(("claude", "weekly"))
     assert cell is not None
     assert cell.pct is None  # low withheld
@@ -102,7 +103,7 @@ def test_overlay_stale_sets_state_and_withholds():
         },
     }
     fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
-    cells = overlay_cells(fs, snap, now, ttl=180)
+    cells = overlay_cells(fs, snap, now, ttl=180, weekly_header=None)
     cell = cells.get(("claude", "weekly"))
     assert cell is not None
     assert cell.pct is None
@@ -133,7 +134,7 @@ def test_rate_window_never_maps_to_cell():
         },
     }
     fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="grok")]
-    cells = overlay_cells(fs, snap, now)
+    cells = overlay_cells(fs, snap, now, weekly_header=None)
     # no cell for weekly from rate
     assert ("grok", "weekly") not in cells
     # rate_info would have it, but cells do not
@@ -165,7 +166,7 @@ def test_fable_maps_to_fable_not_weekly():
         },
     }
     fs = [Forecast("fable", 50, 500, 70.0, None, 100.0, False, profile="claude")]
-    cells = overlay_cells(fs, snap, now)
+    cells = overlay_cells(fs, snap, now, weekly_header=None)
     assert cells.get(("claude", "fable")) is not None
     assert cells.get(("claude", "fable")).pct == 77.0
     assert cells.get(("claude", "weekly")) is None  # not leaked to weekly
@@ -237,7 +238,109 @@ def test_reading_at_full_probe_interval_still_applied():
         },
     }
     fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="grok")]
-    cell = overlay_cells(fs, snap, now).get(("grok", "weekly"))
+    cell = overlay_cells(fs, snap, now, weekly_header=None).get(("grok", "weekly"))
     assert cell is not None
     assert cell.pct == 23.0  # not withheld
     assert cell.state != STATE_STALE
+
+
+# --- header weekly (self-ingested rate limit) tests (plan 054) ---
+
+
+def test_header_weekly_becomes_live_cell():
+    now = time.time()
+    hdr = {"used_percentage": 33.0, "observed_at": now - 5, "stale": False}
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
+    # no web weekly in snap
+    cells = overlay_cells(fs, {"providers": {}}, now, weekly_header=hdr)
+    cell = cells.get(("claude", "weekly"))
+    assert cell is not None
+    assert cell.pct == 33.0
+    assert cell.extractor == "header"
+    assert cell.state == STATE_OK
+    assert abs(cell.age_secs - 5) < 0.1
+
+
+def test_header_weekly_overrides_web_cell():
+    now = time.time()
+    snap = {
+        "providers": {
+            "claude": {
+                "provider": "claude",
+                "state": "ok",
+                "readings": [
+                    {
+                        "provider": "claude",
+                        "metric": METRIC_WEEKLY_PCT,
+                        "value": 30.0,
+                        "confidence": CONF_HIGH,
+                        "extractor": "claude.web",
+                        "evidence": "web",
+                        "fetched_at": now,
+                    }
+                ],
+            }
+        }
+    }
+    hdr = {"used_percentage": 33.0, "observed_at": now - 3, "stale": False}
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
+    cells = overlay_cells(fs, snap, now, weekly_header=hdr)
+    cell = cells.get(("claude", "weekly"))
+    assert cell is not None
+    assert cell.pct == 33.0  # header wins
+    assert cell.extractor == "header"
+
+
+def test_stale_header_weekly_withheld():
+    now = time.time()
+    hdr_stale = {"used_percentage": 33.0, "observed_at": now - 5, "stale": True}
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
+    cells = overlay_cells(fs, {"providers": {}}, now, weekly_header=hdr_stale)
+    assert cells.get(("claude", "weekly")) is None
+
+    hdr_none = {"used_percentage": None, "observed_at": now - 5, "stale": False}
+    cells2 = overlay_cells(fs, {"providers": {}}, now, weekly_header=hdr_none)
+    assert cells2.get(("claude", "weekly")) is None
+
+
+def test_old_header_weekly_withheld_by_ttl():
+    now = time.time()
+    old_obs = now - (FRESH_TTL_SECS + 60)
+    hdr = {"used_percentage": 40.0, "observed_at": old_obs, "stale": False}
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
+    cells = overlay_cells(fs, {"providers": {}}, now, weekly_header=hdr)
+    # age > ttl => withheld
+    assert cells.get(("claude", "weekly")) is None
+
+
+def test_grok_weekly_untouched_by_header():
+    now = time.time()
+    snap = {
+        "providers": {
+            "grok": {
+                "provider": "grok",
+                "state": "ok",
+                "readings": [
+                    {
+                        "provider": "grok",
+                        "metric": METRIC_WEEKLY_PCT,
+                        "value": 55.0,
+                        "confidence": CONF_HIGH,
+                        "extractor": "grok.web",
+                        "evidence": "web",
+                        "fetched_at": now,
+                    }
+                ],
+            }
+        }
+    }
+    hdr_claude = {"used_percentage": 33.0, "observed_at": now - 1, "stale": False}
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="grok")]
+    cells = overlay_cells(fs, snap, now, weekly_header=hdr_claude)
+    cell = cells.get(("grok", "weekly"))
+    assert cell is not None
+    assert cell.pct == 55.0  # grok untouched
+    assert cell.extractor == "grok.web"
+    # claude header creates its cell (intended); does not affect grok
+    cl = cells.get(("claude", "weekly"))
+    assert cl is not None and cl.pct == 33.0 and cl.extractor == "header"

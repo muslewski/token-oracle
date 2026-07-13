@@ -6,6 +6,7 @@ overlay_cells never fabricates a number; it withholds unless CONF_HIGH + fresh.
 
 from dataclasses import dataclass
 
+from ..core import ratelimits as _ratelimits
 from .contract import (
     CONF_HIGH,
     METRIC_FIVE_HOUR_PCT,
@@ -13,9 +14,21 @@ from .contract import (
     METRIC_MODEL_WEEKLY_PCT,
     METRIC_RATE_WINDOW,
     METRIC_WEEKLY_PCT,
+    STATE_OK,
     STATE_STALE,
     STATE_UNAVAILABLE,
 )
+
+_AUTO = object()  # sentinel: default => auto-read the header snapshot
+
+
+def _read_claude_weekly_header(now):
+    """Return core.ratelimits.weekly(now) or None. Never raises."""
+    try:
+        return _ratelimits.weekly(now)
+    except Exception:
+        return None
+
 
 # Freshness window for applying a web reading. MUST exceed the dashboard's
 # LIVE_PROBE_INTERVAL plus one probe's duration, or cap cells go "stale" for the
@@ -61,7 +74,7 @@ def _wkey(name: str) -> str | None:
 
 
 def overlay_cells(
-    forecasts, snapshot: dict | None, now: float, ttl: float = FRESH_TTL_SECS
+    forecasts, snapshot: dict | None, now: float, ttl: float = FRESH_TTL_SECS, weekly_header=_AUTO
 ) -> dict[tuple[str, str], LiveCell]:
     """Build mapping (profile_canon, wkey) -> LiveCell for the given forecasts.
 
@@ -130,6 +143,24 @@ def overlay_cells(
                 else:
                     cells[(p_c, "5h")] = cell
             # METRIC_RATE_WINDOW and RESET_AT intentionally never become a cell here
+
+    # Header weekly override for claude (from self-ingested rate_limits via 053).
+    # Wins over any web scrape cell when fresh + non-stale. No-op otherwise (additive).
+    hdr = _read_claude_weekly_header(now) if weekly_header is _AUTO else weekly_header
+    if isinstance(hdr, dict):
+        up = hdr.get("used_percentage")
+        obs = hdr.get("observed_at")
+        age = None if obs is None else max(0.0, now - float(obs))
+        fresh = (age is None) or (age <= ttl)
+        if up is not None and not hdr.get("stale", False) and fresh:
+            cells[("claude", "weekly")] = LiveCell(
+                pct=float(up),
+                state=STATE_OK,
+                age_secs=age,
+                evidence="claude rate-limit header (seven_day)",
+                extractor="header",
+                state_value=None,
+            )
 
     return cells
 
