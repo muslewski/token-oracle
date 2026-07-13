@@ -246,6 +246,25 @@ aged to ~2.2k. Zero Python changed since Phase-1's 248-green, confirming Phase 2
 did not cause it. Fix (plan 051, verified by the advisor): mock the two overlay
 functions in that one test → deterministic 5000.
 
+**Extended 2026-07-13 at `bd54990`** with plans 058–060: the **sticky-hooks
+round** (pre-launch retention), from a brainstorming session toward the 10k-star
+goal. Decision: build the two daily-visible surfaces that retain a launch wave
+BEFORE launching (npm publish + runbook 050 stay the operator's next outward
+step). 058 = pure cost/usage aggregation core (`core/report.py`) + a cheap
+read-only `engine.cached_events` seam — `pricing.py`'s first non-test consumer.
+059 = `oracle report`, a standalone daily ledger of tokens + USD + **% of the
+weekly cap** (the column ccusage can't show), `--by day/week/model`,
+`--since/--until`, `--json`; decoupled from the TUI tab shell (018, deferred).
+060 = statusline headline `◔ 5h 26% · wk 60% · $8 today` (current-usage from the
+053/054 header self-ingest + `cost_today`) plus `oracle statusline --install`
+(safe auto-wire of `~/.claude/settings.json`: backup, idempotent,
+refuse-clobber-unless-`--force`) — the friction-killer that turns the
+built-but-unwired self-ingest live. **Dispatch:** 059 and 060 both edit
+`cli/main.py` and both consume 058 → ONE sequential grok-xhigh executor in a
+single worktree (058 → 059 → 060), not parallel. `--by project` deliberately
+deferred (events carry no project id). Brainstorm rationale in memory
+`audit-2026-07-12-state-and-roadmap`.
+
 Verification baseline for every plan: `pip install -e ".[dev]"` then
 `python -m pytest -q`, `ruff check token_oracle/`, `ruff format --check token_oracle/`,
 `mypy token_oracle/ --ignore-missing-imports` (mirrors CI).
@@ -313,6 +332,9 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 055 | `box_line` truncation preserves color (grey text stops turning white when narrow) | P1 | S | — (follow-up to 052) | DONE — operator-reported regression exposed by 052: narrowing turned the dim provenance/meta lines below the sliders WHITE. Root-caused via systematic-debugging (reproduced): `colors.box_line` truncated overflowing interior text via `_ANSI_RE.sub("", text)` — stripped the dim SGR. 052's narrower boxes made those lines overflow → white at box_w≤36. Fix = color-preserving cell-aware truncate (keep SGR, append `…`+reset), mirroring `scene.truncate_display`. grok-xhigh executor (commit `3a0c4f5`), merged + pushed. Advisor-verified: dim preserved at every width incl. 36/34/32, 052 sweep still holds (0 overflow), 269 pass, gates clean, only colors.py+test_colors.py. |
 | 056 | Low-width triage: show the most-important number when the terminal is really narrow | P1 | S-M | — (follow-up to 052/055) | DONE — operator report: at tall+narrow the % vanished. Root-caused via systematic-debugging (reproduced): the compact per-profile line listed windows ALPHABETICALLY then `Scene.render(w)` cut from the right, dropping the binding (highest-%) window's number (`✳ claude  5h` — no %). Fix = reorder each line by % DESC, format pct-first, build-to-fit via new `_fit_join` (drops trailing low-priority items cleanly; if the `✳ claude ` prefix can't fit, emits the binding item alone) so the closest-to-cap number survives to ~6 cells. Added single-line `glance` floor (🔮 worst-per-provider) for 1-row terminals. grok-xhigh executor (4 commits, tip `d9b1ce1`) + advisor surgical fix `66e436d` (glance_fill was importance-blind: sorted per-provider name order + pct-last → dropped the binding `99%` for a lower `33%` on 1-row narrow; now % desc + pct-first, +2 regression tests). Merged `--no-ff` at `19acc41`. Advisor-verified: binding % survives every width 40→6 (tall) and glance floor down to W=8; 276 pass (+7); ruff/format/mypy clean; 052 sweep + `size=None` byte-identity untouched. Executor deviation on ladder order (`tiny` before `glance`) verified CORRECT — plan's stated order would have made `tiny` dead code. |
 | 057 | Borderless slider bars for narrow terminals (keep the bars, don't fall to text) | P1 | M | — (follow-up to 052/056) | DONE — operator: "I like these sliders, adjust them" — below MIN_BOX (34) the panels dropped the bars straight to a text line. Root-caused via systematic-debugging (reproduced): `_panels_arrangement` returned `oneline` for w<34. Fix (chosen style: borderless labeled bars, confirmed via previewed question) = third width regime `bars` for 16..33: provider header + one `label pct% bar` row per window, no box frame, bar shrinks 20→3 cells, % pct-first. Renderer PROTOTYPED by advisor before planning (every row exactly w cells). grok-xhigh executor (3 commits, tip `697847d`), verbatim to plan. Merged `--no-ff` at `c60e540`. Advisor-verified INDEPENDENTLY: fixed-height contract holds (`panel_height == emitted lines = 7` at every bars width 33→16, footer not truncated, all rows survive, all fit); 280 pass (+4); ruff/format/mypy clean; 052 sweep + `size=None` byte-identity green. NOTE: executor's `test_bars_height_matches_fill` was weakened to a detail-invariance check only (punts on the line-count assertion) — advisor verified the real contract by hand; harmless but a follow-up could tighten that test. Three regimes now: box ≥34 → bars 16–33 → text <16 (then glance/tiny by height). |
+| 058 | Report core (`core/report.py` aggregation) + cached-events seam | P1 | M | — | TODO |
+| 059 | `oracle report` — daily cost+cap ledger (`--by/--since/--json`) | P1 | M | 058 | TODO |
+| 060 | Statusline headline: `$today` cost + safe `--install` auto-wire | P1 | M | 058 | TODO |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
