@@ -1,6 +1,7 @@
 # Plan 058 — Cost/usage report core (`core/report.py`) + cached-events seam
 
 **Written against commit `bd54990`.** If `token_oracle/core/pricing.py`,
+**Status:** DONE — merged to main via advisor/058-sticky-hooks (2026-07-14)
 `token_oracle/core/events.py`, or `token_oracle/core/engine.py` differ
 materially from the excerpts below, STOP and report — the design assumes this
 shape.

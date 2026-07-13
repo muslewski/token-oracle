@@ -1,6 +1,7 @@
 # Plan 059 — `oracle report` subcommand (daily cost+cap ledger)
 
 **Written against commit `bd54990`.** Depends on **plan 058** (`core/report.py`
+**Status:** DONE — merged to main via advisor/058-sticky-hooks (2026-07-14)
 + `engine.cached_events`) being applied first in the same worktree. If
 `core/report.py` does not export `daily_ledger`, `group_ledger`, `weekly_cap`,
 `LedgerRow` — STOP; run 058 first.

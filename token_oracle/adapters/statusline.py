@@ -24,3 +24,10 @@ def _segment(f, enabled):
 def render(forecasts, color=None):
     enabled = c.pipe_color() if color is None else color
     return "  ".join(_segment(f, enabled) for f in forecasts if not f.idle)
+
+
+def cost_segment(usd, enabled):
+    """' · $X.XX' when usd is a positive float, else '' (never $0.00 noise)."""
+    if not isinstance(usd, (int, float)) or usd <= 0:
+        return ""
+    return c.dim(f" · ${usd:,.2f} today", enabled)

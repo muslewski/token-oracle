@@ -253,3 +253,28 @@ def detect_resets(prev_fs, curr_fs, threshold_drop=0.3, low_abs=10000, high_prev
                 }
             )
     return resets
+
+
+def cached_events(config=None):
+    """Normalized event list from the on-disk cache WITHOUT re-scanning
+    (a cheap read for the statusline hot path, which runs after forecast() has
+    already refreshed the cache). Single-source: cache['events']. Multi-profile:
+    concatenation of every profiles[*]['events']. Returns [] on any problem.
+    Never raises."""
+    try:
+        cfg = config or load_config()
+        cache = load_cache(cfg.cache_path)
+        raw = []
+        if isinstance(cache, dict):
+            # legacy single-source lives at top-level "events"; multi under profiles
+            # load_cache always injects "profiles":{} so we collect top + profiles
+            raw.extend((cache or {}).get("events") or [])
+            if isinstance(cache.get("profiles"), dict):
+                for slc in cache["profiles"].values():
+                    if isinstance(slc, dict):
+                        raw.extend(slc.get("events") or [])
+        return [
+            events_mod.normalize(e) for e in raw if isinstance(e, (list, tuple)) and len(e) >= 2
+        ]
+    except Exception:
+        return []

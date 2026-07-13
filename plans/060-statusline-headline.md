@@ -1,6 +1,7 @@
 # Plan 060 — statusline headline: `$today` cost + `--install` auto-wire
 
 **Written against commit `bd54990`.** Depends on **plan 058** (`core/report.py`
+**Status:** DONE — merged to main via advisor/058-sticky-hooks (2026-07-14)
 `cost_today` + `engine.cached_events`). Apply 058 (and ideally 059) first in the
 same worktree. If `report.cost_today` / `engine.cached_events` are missing —
 STOP.

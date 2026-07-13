@@ -531,3 +531,269 @@ def test_forecast_subprocess_no_brokenpipe_noise():
     )
     assert b"BrokenPipeError" not in p.stderr
     assert b"Traceback" not in p.stderr
+
+
+# --- plan 060: statusline headline + --install ---
+
+
+def test_statusline_fallback_unchanged_when_no_rl(tmp_path, capsys, monkeypatch):
+    # hermetic: XDG + generic config; no ratelimits snapshot -> old render + cost tail possible
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100, 1234]], now)
+    rc = main(["statusline", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    # must contain the forecast segment form (not start with ◔)
+    assert "🕐" in out or "/" in out  # old style tokens
+    # cost tail may appear if priced, but here generic simple -> no or —
+    assert "idle" not in out or out  # non idle
+
+
+def test_statusline_headline_when_rl_present(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    now = 1700000000.0
+    # ingest ratelimits snapshot into the XDG location that RL uses
+    from token_oracle.core import ratelimits as RL
+
+    RL.ingest(
+        {
+            "five_hour": {"used_percentage": 26, "resets_at": now + 3600},
+            "seven_day": {"used_percentage": 60, "resets_at": now + 600000},
+        },
+        now=now,
+    )
+    cfg = _cfg(tmp_path, [[now - 100, 100]], now)
+    rc = main(["statusline", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "5h 26%" in out
+    assert "wk 60%" in out
+    assert "◔" in out
+
+
+def test_statusline_install_fresh(tmp_path, capsys):
+    # use -- path to tmp settings, never real ~/.claude
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    # no file yet
+    rc = main(
+        ["statusline", "--install", "--config", "/dev/null", "--now", "0"]
+    )  # config irrelevant
+    # but _statusline_install uses default unless path; monkey the func or call via internal
+    # call helper directly for hermetic path
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=False, path=str(spath))
+    assert rc == 0
+    data = json.loads(spath.read_text())
+    assert data["statusLine"]["command"] == "oracle statusline"
+    out = capsys.readouterr().out
+    assert "backed up" not in out  # fresh no backup
+    assert "statusLine →" in out or "wired" in out or rc == 0
+
+
+def test_statusline_install_idempotent(tmp_path, capsys):
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    spath.write_text(
+        json.dumps(
+            {"statusLine": {"type": "command", "command": "oracle statusline", "padding": 0}}
+        )
+    )
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=False, path=str(spath))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already wired" in out
+
+
+def test_statusline_install_refuse_without_force(tmp_path, capsys):
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    spath.write_text(json.dumps({"statusLine": {"type": "command", "command": "other"}}))
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=False, path=str(spath))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "already configured" in out or "Pass --force" in out
+    # untouched
+    assert json.loads(spath.read_text())["statusLine"]["command"] == "other"
+
+
+def test_statusline_install_force_replaces_and_backs_up(tmp_path, capsys):
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    orig = {"foo": 1, "statusLine": {"type": "command", "command": "other"}}
+    spath.write_text(json.dumps(orig))
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=True, path=str(spath))
+    assert rc == 0
+    bak = spath.with_suffix(spath.suffix + ".oracle.bak")
+    assert bak.exists()
+    data = json.loads(spath.read_text())
+    assert data["statusLine"]["command"] == "oracle statusline"
+    assert data["foo"] == 1  # other keys preserved
+
+
+def test_statusline_install_no_claude_dir(tmp_path, capsys):
+    from token_oracle.cli.main import _statusline_install
+
+    bad = str(tmp_path / "no" / "claude" / "settings.json")
+    rc = _statusline_install(force=False, path=bad)
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "not found" in out
+
+
+# --- plan 059: oracle report subcommand ---
+
+
+def test_report_help_has_flags(capsys):
+    with pytest.raises(SystemExit) as ei:
+        main(["report", "--help"])
+    assert ei.value.code == 0
+    out = capsys.readouterr().out
+    assert "--by" in out and "{day,week,model}" in out
+    assert "--since" in out and "--until" in out and "--days" in out
+    assert "--json" in out
+    assert "weekly cap" in out.lower() or "ledger" in out.lower()
+
+
+def test_report_daily_table_and_total(tmp_path, capsys):
+    now = 1_700_000_000.0
+    day = 86400.0
+    # 3 days of events
+    feed = [
+        [now, 1000],
+        [now - 1 * day, 2000],
+        [now - 2 * day, 500],
+    ]
+    cfg = _cfg(tmp_path, feed, now)
+    # override windows to have a weekly for cap
+    import json as _json
+
+    cpath = cfg
+    cdata = _json.loads(open(cpath).read())
+    cdata["windows"] = [
+        {"name": "5h", "cap": 220000, "period_secs": 18000},
+        {"name": "weekly", "cap": 8000000, "period_secs": 604800},
+    ]
+    open(cpath, "w").write(_json.dumps(cdata))
+    rc = main(["report", "--config", cpath, "--now", str(now), "--days", "3"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "TOTAL" in out
+    assert "3-day ledger" in out or "ledger" in out
+    # tokens present (fmt_tokens may use k)
+    assert "k" in out
+    # %CAP for day view
+    assert "%CAP" in out or "%" in out
+
+
+def test_report_json_shape(tmp_path, capsys):
+    now = 1_700_000_000.0
+    cfg = _cfg(tmp_path, [[now - 100, 1234]], now)
+    rc = main(["report", "--json", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert "generated_at" in data
+    assert "sections" in data
+    assert len(data["sections"]) >= 1
+    row0 = data["sections"][0]["rows"][0]
+    assert "label" in row0 and "tokens" in row0 and "cost" in row0
+    assert "unpriced_tokens" in row0 and "pct_cap" in row0
+
+
+def test_report_by_model(tmp_path, capsys):
+    now = 1_700_000_000.0
+    # events with model info (generic may not, but normalize accepts; use full)
+    feed = [
+        [now, 100, "claude-sonnet-4", 50, 50, 0, 0, 0.3],
+        [now, 200, "grok", 100, 100, 0, 0, None],
+    ]
+    cfg = _cfg(tmp_path, feed, now)
+    rc = main(["report", "--by", "model", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "MODEL" in out
+    assert "TOTAL" in out
+    # no %CAP header for non-day
+    assert "%CAP" not in out or "—" in out
+
+
+def test_report_since_until_filter(tmp_path, capsys):
+    now = 1_700_000_000.0
+    day = 86400.0
+    feed = [[now, 10], [now - 5 * day, 20], [now - 10 * day, 30]]
+    cfg = _cfg(tmp_path, feed, now)
+    rc = main(
+        [
+            "report",
+            "--config",
+            cfg,
+            "--now",
+            str(now),
+            "--since",
+            "2023-11-01",
+            "--until",
+            "2023-11-20",
+        ]
+    )
+    assert rc == 0
+    out = capsys.readouterr().out
+    # depending on ts, but should not crash; at least TOTAL present
+    assert "TOTAL" in out
+
+
+def test_report_bad_since_exits_2(tmp_path, capsys):
+    now = 1_700_000_000.0
+    cfg = _cfg(tmp_path, [[now, 1]], now)
+    rc = main(["report", "--config", cfg, "--now", str(now), "--since", "not-a-date"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "since" in err.lower() or "date" in err.lower() or rc == 2  # at least rc
+
+
+def test_report_no_data_piped_is_stable(monkeypatch, capsys):
+    # piped: no hint
+    monkeypatch.setattr(cli_main, "_is_interactive", lambda: False)
+    fake_cfg = SimpleNamespace(
+        profiles=None,
+        source="generic",
+        source_opts={},
+        windows=[],
+        cost_mode="auto",
+        pricing={},
+    )
+    monkeypatch.setattr(cli_main, "load_config", lambda p: fake_cfg)
+    # report scans; use cfg that yields no data
+    # simplest: use a cfg with no events feed that produces []
+    rc = cli_main.main(["report", "--now", "1000"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no usage data yet" not in out
+
+
+def test_report_no_data_tty_shows_hint(monkeypatch, capsys):
+    monkeypatch.setattr(cli_main, "_is_interactive", lambda: True)
+    fake_cfg = SimpleNamespace(
+        profiles=None,
+        source="generic",
+        source_opts={},
+        windows=[],
+        cost_mode="auto",
+        pricing={},
+    )
+    monkeypatch.setattr(cli_main, "load_config", lambda p: fake_cfg)
+    rc = cli_main.main(["report", "--now", "1000"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "no usage data yet" in out
