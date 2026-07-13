@@ -150,15 +150,31 @@ def box_line(text, width=40, enabled=True):
     # pad or truncate using *display* width so wide glyphs / colored bars align
     inner_w = width - 2
     if display_width(text) > inner_w:
-        # trim character-by-character until it fits the cell budget (leaving 1 for …)
-        cut = ""
+        # Truncate to the cell budget while KEEPING ANSI SGR (so a dim/colored
+        # line stays dim/colored), leaving 1 cell for the ellipsis; append a
+        # reset so styling never bleeds past the box.
+        budget = inner_w - 1
+        out = []
         used = 0
-        for ch in _ANSI_RE.sub("", text):
+        i = 0
+        had_sgr = False
+        while i < len(text):
+            m = _ANSI_RE.match(text, i)
+            if m:
+                out.append(m.group(0))
+                had_sgr = True
+                i = m.end()
+                continue
+            ch = text[i]
             w = _char_cells(ch)
-            if used + w > inner_w - 1:
+            if used + w > budget:
                 break
-            cut += ch
+            out.append(ch)
             used += w
-        text = cut + "…"
+            i += 1
+        out.append("…")
+        if had_sgr:
+            out.append(RESET)
+        text = "".join(out)
     pad = " " * (inner_w - display_width(text))
     return f"│{text}{pad}│"
