@@ -28,10 +28,10 @@ from ..live.overlay import overlay_cells, rate_info
 from ..live.store import load_snapshot
 from .scene import Painter, Region, Scene
 
-BAR_W = 22          # default/maximum gauge width
-BAR_W_MIN = 6       # narrowest legible gauge
-MIN_BOX = 34        # min box width that still fits "glyph name pct bar reset"
-BOX_MAX = 66        # widest stacked box (unchanged from today)
+BAR_W = 22  # default/maximum gauge width
+BAR_W_MIN = 6  # narrowest legible gauge
+MIN_BOX = 34  # min box width that still fits "glyph name pct bar reset"
+BOX_MAX = 66  # widest stacked box (unchanged from today)
 
 
 def _clamp(v, lo, hi):
@@ -133,10 +133,10 @@ def panel_height(groups: dict, detail: int = 2, w: int = 999) -> int:
     if mode == "side":
         n = len(groups[list(groups.keys())[0]])
         return _panel_block_height(n, detail)
-    total = 0                      # stack
+    total = 0  # stack
     for _pn, fs in groups.items():
         total += _panel_block_height(len(fs) or 1, detail)
-        total += 1                 # inter-block gap line
+        total += 1  # inter-block gap line
     return total
 
 
@@ -240,7 +240,16 @@ def _active_row_targets(forecasts, cells) -> dict:
 
 
 def _render_profile_block(
-    pname, forecasts, now, enabled, cells=None, width=66, detail=2, anim_pct=None, pulse=None, bar_w=BAR_W
+    pname,
+    forecasts,
+    now,
+    enabled,
+    cells=None,
+    width=66,
+    detail=2,
+    anim_pct=None,
+    pulse=None,
+    bar_w=BAR_W,
 ):
     """Render a boxed panel. `detail` sets lines per window row (height ladder):
       2 = head + meta + provenance (full), 1 = head + meta, 0 = head only.
