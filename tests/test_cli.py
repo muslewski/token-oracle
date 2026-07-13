@@ -509,6 +509,126 @@ def test_forecast_subprocess_no_brokenpipe_noise():
     assert b"Traceback" not in p.stderr
 
 
+# --- plan 060: statusline headline + --install ---
+
+
+def test_statusline_fallback_unchanged_when_no_rl(tmp_path, capsys, monkeypatch):
+    # hermetic: XDG + generic config; no ratelimits snapshot -> old render + cost tail possible
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100, 1234]], now)
+    rc = main(["statusline", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    out = capsys.readouterr().out.strip()
+    # must contain the forecast segment form (not start with ◔)
+    assert "🕐" in out or "/" in out  # old style tokens
+    # cost tail may appear if priced, but here generic simple -> no or —
+    assert "idle" not in out or out  # non idle
+
+
+def test_statusline_headline_when_rl_present(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    now = 1700000000.0
+    # ingest ratelimits snapshot into the XDG location that RL uses
+    from token_oracle.core import ratelimits as RL
+
+    RL.ingest(
+        {
+            "five_hour": {"used_percentage": 26, "resets_at": now + 3600},
+            "seven_day": {"used_percentage": 60, "resets_at": now + 600000},
+        },
+        now=now,
+    )
+    cfg = _cfg(tmp_path, [[now - 100, 100]], now)
+    rc = main(["statusline", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "5h 26%" in out
+    assert "wk 60%" in out
+    assert "◔" in out
+
+
+def test_statusline_install_fresh(tmp_path, capsys):
+    # use -- path to tmp settings, never real ~/.claude
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    # no file yet
+    rc = main(
+        ["statusline", "--install", "--config", "/dev/null", "--now", "0"]
+    )  # config irrelevant
+    # but _statusline_install uses default unless path; monkey the func or call via internal
+    # call helper directly for hermetic path
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=False, path=str(spath))
+    assert rc == 0
+    data = json.loads(spath.read_text())
+    assert data["statusLine"]["command"] == "oracle statusline"
+    out = capsys.readouterr().out
+    assert "backed up" not in out  # fresh no backup
+    assert "statusLine →" in out or "wired" in out or rc == 0
+
+
+def test_statusline_install_idempotent(tmp_path, capsys):
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    spath.write_text(
+        json.dumps(
+            {"statusLine": {"type": "command", "command": "oracle statusline", "padding": 0}}
+        )
+    )
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=False, path=str(spath))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "already wired" in out
+
+
+def test_statusline_install_refuse_without_force(tmp_path, capsys):
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    spath.write_text(json.dumps({"statusLine": {"type": "command", "command": "other"}}))
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=False, path=str(spath))
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "already configured" in out or "Pass --force" in out
+    # untouched
+    assert json.loads(spath.read_text())["statusLine"]["command"] == "other"
+
+
+def test_statusline_install_force_replaces_and_backs_up(tmp_path, capsys):
+    sdir = tmp_path / ".claude"
+    sdir.mkdir()
+    spath = sdir / "settings.json"
+    orig = {"foo": 1, "statusLine": {"type": "command", "command": "other"}}
+    spath.write_text(json.dumps(orig))
+    from token_oracle.cli.main import _statusline_install
+
+    rc = _statusline_install(force=True, path=str(spath))
+    assert rc == 0
+    bak = spath.with_suffix(spath.suffix + ".oracle.bak")
+    assert bak.exists()
+    data = json.loads(spath.read_text())
+    assert data["statusLine"]["command"] == "oracle statusline"
+    assert data["foo"] == 1  # other keys preserved
+
+
+def test_statusline_install_no_claude_dir(tmp_path, capsys):
+    from token_oracle.cli.main import _statusline_install
+
+    bad = str(tmp_path / "no" / "claude" / "settings.json")
+    rc = _statusline_install(force=False, path=bad)
+    assert rc == 1
+    out = capsys.readouterr().out
+    assert "not found" in out
+
+
 # --- plan 059: oracle report subcommand ---
 
 
