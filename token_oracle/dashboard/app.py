@@ -81,6 +81,7 @@ def _fit_join(prefix: str, items: list[str], width: int, sep: str = " · ") -> s
     first (binding) item alone so the most-important number always survives at
     widths >= ~10 cells (caller orders items[0] as highest %)."""
     from ..cli.colors import display_width
+
     if not items:
         return prefix
     out = prefix
@@ -190,7 +191,7 @@ def _compact_profile_line(pname, forecasts, now, enabled, cells=None, width=80) 
     prefix = c.dim(f"{icon} {pname.lower()}  ", enabled)
     if not rows:
         return c.dim(f"{icon} {pname.lower()}  idle", enabled)
-    rows.sort(key=lambda r: r[0], reverse=True)              # binding (highest %) first
+    rows.sort(key=lambda r: r[0], reverse=True)  # binding (highest %) first
     items = []
     for i, (pct, short) in enumerate(rows):
         text = f"{round(pct)}% {short}"
@@ -581,7 +582,10 @@ def render_frame(
     def compact_fill() -> list[str]:
         if not groups:
             return [c.dim("(no data)", enabled)]
-        return [_compact_profile_line(pn, groups[pn], now, enabled, cells, w) for pn in sorted(groups)]
+        clines = [
+            _compact_profile_line(pn, groups[pn], now, enabled, cells, w) for pn in sorted(groups)
+        ]
+        return clines
 
     def glance_fill() -> list[str]:
         if not groups:
@@ -598,7 +602,11 @@ def render_frame(
                     pct = (100.0 * f.used / f.cap) if getattr(f, "cap", 0) else 0.0
                     short = "5h"
                 else:
-                    wkey = "weekly" if ww in ("weekly", "week") else ("fable" if ww == "fable" else None)
+                    wkey = (
+                        "weekly"
+                        if ww in ("weekly", "week")
+                        else ("fable" if ww == "fable" else None)
+                    )
                     cell = (cells or {}).get((p_canon, wkey)) if wkey else None
                     pct = cell.pct if (cell and cell.pct is not None) else f.projected_pct
                     short = "wk" if ww in ("weekly", "week") else (ww or "?")
@@ -629,8 +637,8 @@ def render_frame(
     #   meta    header+alert+panels(2/row)+footer            (drop provenance + activity)
     #   heads   header+alert+panels(1/row)+footer            (key % rows only)
     #   oneline header+alert+one compact line per profile    (no boxes)
-    #   glance  header+alert+glance(1)                       (worst-per-provider 🔮 line)
     #   tiny    header only (title + live summary chip)
+    #   glance  single-line 🔮 worst-per-provider floor      (when < HEADER_H rows)
     def _regions_for(level: str) -> list["Region"]:
         if level == "full":
             return [
@@ -666,7 +674,7 @@ def render_frame(
         return [Region("header", HEADER_H, header_fill)]  # tiny
 
     avail_h = int(getattr(size, "lines", 0) or 0) if size is not None else 0
-    for level in ("full", "meta", "heads", "oneline", "glance", "tiny"):
+    for level in ("full", "meta", "heads", "oneline", "tiny", "glance"):
         regs = _regions_for(level)
         total = sum(r.height for r in regs)
         if avail_h == 0 or total <= avail_h:

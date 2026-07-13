@@ -1,4 +1,5 @@
 import os
+import re
 
 from token_oracle.cli.colors import display_width
 from token_oracle.core.contracts import Forecast
@@ -7,6 +8,7 @@ from token_oracle.dashboard.app import (
     BAR_W,
     _active_row_targets,
     _bar,
+    _compact_profile_line,
     _pulse_level,
     render_frame,
     render_frame_str,
@@ -232,3 +234,82 @@ def test_size_none_unchanged():
     # also the structure is the wide side-by-side one (pre-chop content had 123-wide)
     # after render(80) for color=false the lines are the 80-char prefix
     assert len(out.splitlines()) == 15  # header2+alert1+panels8+act3+foot1 for n=2 side
+
+
+# --- 056 low-width triage priority tests ---
+
+
+def _claude_binding_fs():
+    """claude with 5h=2%, fable=99%, weekly=33% (binding is fable)."""
+    return [
+        Forecast("5h", 1140, 57000, 2.0, None, 7200.0, False, profile="claude"),
+        Forecast("fable", 5940, 6000, 99.0, None, 7200.0, False, profile="claude"),
+        Forecast("weekly", 90000, 270000, 33.0, None, 7200.0, False, profile="claude"),
+    ]
+
+
+def test_compact_line_orders_binding_first():
+    """Highest-% window leads; order is by current % DESC not alpha."""
+    fs = _claude_binding_fs()
+    line = _compact_profile_line("claude", fs, 100000.0, False, {}, width=200)
+    plain = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", line)
+    # 99% before 33% before 2%
+    assert plain.index("99%") < plain.index("33%") < plain.index("2%"), f"wrong order: {plain}"
+
+
+def test_compact_line_fits_and_keeps_binding():
+    """At every narrow width the line <=w, contains binding 99%, no dangling sep."""
+    import re as _re  # local to avoid polluting if not
+
+    fs = _claude_binding_fs()
+    for W in (40, 32, 24, 20, 16, 12, 10):
+        line = _compact_profile_line("claude", fs, 100000.0, False, {}, width=W)
+        dw = display_width(line)
+        plain = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", line)
+        assert dw <= W, f"W={W} dw={dw} > W: {plain!r}"
+        assert "99%" in plain, f"W={W} lost binding 99%: {plain!r}"
+        assert not plain.endswith("· "), f"W={W} dangling '· ': {plain!r}"
+        assert not plain.endswith("·"), f"W={W} dangling '·': {plain!r}"
+
+
+def test_glance_level_used_when_one_row():
+    """At height=1 we get exactly the glance (🔮) line, fits w, contains binding."""
+    fs = _claude_binding_fs()
+    size = os.terminal_size((30, 1))
+    frame = render_frame(fs, now=100000.0, color=True, size=size)
+    assert len(frame) == 1
+    line = frame[0]
+    assert display_width(line) <= 30
+    assert "🔮" in line
+    plain = re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", line)
+    assert "99%" in plain
+
+
+def test_glance_before_tiny():
+    """At 1 row, glance (with %) is chosen before the header-only tiny fallback."""
+    fs = _claude_binding_fs()
+    size = os.terminal_size((24, 1))
+    frame = render_frame(fs, now=100000.0, color=False, size=size)
+    assert len(frame) == 1
+    line = frame[0]
+    assert "🔮" in line
+    assert "%" in line, "glance should show a % number (not pure tiny header)"
+
+
+def test_compact_no_dangling_separator():
+    """No compact/glance line ends with sep or has dangling '·  ·' / ' · ' at end."""
+    import re as _re
+
+    fs = _claude_binding_fs()
+    for W in (40, 24, 16, 12, 10):
+        # compact
+        cline = _compact_profile_line("claude", fs, 100000.0, False, {}, width=W)
+        cplain = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", cline)
+        assert not cplain.rstrip().endswith("·"), f"compact W={W} ends sep: {cplain!r}"
+        assert "·  ·" not in cplain and cplain.strip().endswith("·") is False
+        # glance
+        size = os.terminal_size((W, 1))
+        gframe = render_frame(fs, now=100000.0, color=False, size=size)
+        gline = gframe[0] if gframe else ""
+        gplain = _re.sub(r"\x1b\[[0-9;?]*[a-zA-Z]", "", gline)
+        assert not gplain.rstrip().endswith("·"), f"glance W={W} ends sep: {gplain!r}"
