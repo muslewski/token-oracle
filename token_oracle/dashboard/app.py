@@ -78,7 +78,8 @@ def _fit_join(prefix: str, items: list[str], width: int, sep: str = " · ") -> s
     cells, joined by `sep`. Never emits a trailing separator; never exceeds
     `width`. `prefix` and `items` may already contain ANSI (measured by
     display_width). If not even the first item fits after the prefix, returns the
-    prefix trimmed to width (caller orders items so items[0] is most important)."""
+    first (binding) item alone so the most-important number always survives at
+    widths >= ~10 cells (caller orders items[0] as highest %)."""
     from ..cli.colors import display_width
     if not items:
         return prefix
@@ -92,6 +93,11 @@ def _fit_join(prefix: str, items: list[str], width: int, sep: str = " · ") -> s
         out = out + ("" if first else sep) + it
         used += add
         first = False
+    if first and items:
+        # prefix too wide to leave room for binding item; emit just the binding
+        # item (ensures e.g. '99% fable' appears even when '✳ claude  ' prefix
+        # would overflow a ~12-cell terminal)
+        return items[0]
     return out
 
 
@@ -162,15 +168,12 @@ def panel_height(groups: dict, detail: int = 2, w: int = 999) -> int:
     return total
 
 
-def _compact_profile_line(pname, forecasts, now, enabled, cells=None) -> str:
-    """One-line summary for a profile (used when the terminal is too short for
-    boxes): icon + name + each active window's freshest %. 5h uses local
-    real-time usage; caps use the web cell when present, else local projection."""
+def _compact_profile_line(pname, forecasts, now, enabled, cells=None, width=80) -> str:
     cells = cells or {}
     p_canon = "grok" if "grok" in pname.lower() else "claude"
     icon = _profile_icon(pname)
-    parts: list[str] = []
-    for f in sorted(forecasts, key=lambda x: x.window):
+    rows = []  # (pct, short)
+    for f in forecasts:
         ww = (f.window or "").lower()
         if bool(getattr(f, "idle", False)):
             continue
@@ -183,9 +186,17 @@ def _compact_profile_line(pname, forecasts, now, enabled, cells=None) -> str:
             cell = cells.get((p_canon, wkey)) if wkey else None
             pct = cell.pct if (cell and cell.pct is not None) else f.projected_pct
             short = "wk" if ww in ("weekly", "week") else (ww or "?")
-        parts.append(f"{short} {round(pct)}%")
-    body = " · ".join(parts) if parts else "no active windows"
-    return c.dim(f"{icon} {pname.lower()}  {body}", enabled)
+        rows.append((float(pct), short))
+    prefix = c.dim(f"{icon} {pname.lower()}  ", enabled)
+    if not rows:
+        return c.dim(f"{icon} {pname.lower()}  idle", enabled)
+    rows.sort(key=lambda r: r[0], reverse=True)              # binding (highest %) first
+    items = []
+    for i, (pct, short) in enumerate(rows):
+        text = f"{round(pct)}% {short}"
+        # make the single most-critical item pop with its gauge color
+        items.append(c.gauge(text, pct, enabled) if i == 0 else c.dim(text, enabled))
+    return _fit_join(prefix, items, width)
 
 
 def _row_glyph(cell, is_idle: bool) -> str:
@@ -570,7 +581,7 @@ def render_frame(
     def compact_fill() -> list[str]:
         if not groups:
             return [c.dim("(no data)", enabled)]
-        return [_compact_profile_line(pn, groups[pn], now, enabled, cells) for pn in sorted(groups)]
+        return [_compact_profile_line(pn, groups[pn], now, enabled, cells, w) for pn in sorted(groups)]
 
     def activity_fill() -> list[str]:
         log = list(probe_log or [])[:3]
