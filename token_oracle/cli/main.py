@@ -12,15 +12,24 @@ import time
 from ..adapters import statusline as sl
 from ..adapters import tmux as tx
 from ..cli import colors
-from ..core.config import PRESETS, default_config_path, load_config, write_default_config
+from ..core import events as events_mod
+from ..core import report as report_mod
+from ..core.config import (
+    PRESETS,
+    _window_from_dict,
+    default_config_path,
+    load_config,
+    write_default_config,
+)
 from ..core.engine import forecast as run_forecast
 from ..core.profile import HIST_SECS
-from ..core.timeutil import fmt_dur
+from ..core.timeutil import fmt_dur, fmt_tokens
 from ..snapshot.writer import build_snapshot, default_snapshot_path, write_snapshot
 from ..sources.base import available, get_source
 
 _CMD_HELP = {
     "forecast": "print a compact usage forecast (time left before your cap)",
+    "report": "daily token + cost ledger with pct of your weekly cap",
     "snapshot": "write the current forecast to a JSON snapshot file",
     "statusline": "print a one-line status for shell prompts / status bars",
     "tmux": "print a tmux-formatted status string",
@@ -87,6 +96,130 @@ def _first_run_hint():
         "\n"
         "docs: https://github.com/muslewski/token-oracle"
     )
+
+
+def _parse_date(s):
+    """Parse YYYY-MM-DD to unix ts (local midnight); None on bad input."""
+    if not s:
+        return None
+    try:
+        return time.mktime(time.strptime(s, "%Y-%m-%d"))
+    except Exception:
+        return None
+
+
+def _report_sections(cfg, now, args):
+    """Return list of section dicts, one per profile (or single). Each has
+    profile, cap, by, rows (list of dicts from LedgerRow)."""
+    sections = []
+    multi = bool(cfg.profiles)
+    if multi:
+        for pname in sorted(cfg.profiles.keys()):
+            pdef = cfg.profiles[pname]
+            src_name = pdef.get("source", cfg.source)
+            opts = pdef.get("source_opts", cfg.source_opts or {})
+            wraw = pdef.get("windows") or cfg.windows
+            wins = []
+            for w in wraw or []:
+                if isinstance(w, dict):
+                    try:
+                        wins.append(_window_from_dict(w))
+                    except Exception:
+                        continue
+                else:
+                    wins.append(w)
+            cap = report_mod.weekly_cap(wins) or 0
+            try:
+                src = get_source(src_name, opts)
+                _f, evs = src.scan({}, now, HIST_SECS)
+                events = [events_mod.normalize(e) for e in evs]
+            except Exception:
+                events = []
+            # apply since/until filter (local day)
+            since_ts = _parse_date(getattr(args, "since", None))
+            until_ts = _parse_date(getattr(args, "until", None))
+            if since_ts is not None or until_ts is not None:
+                filtered = []
+                for e in events:
+                    dk = report_mod.day_key(e[0])
+                    if since_ts is not None:
+                        sday = report_mod.day_key(since_ts)
+                        if dk < sday:
+                            continue
+                    if until_ts is not None:
+                        uday = report_mod.day_key(until_ts)
+                        if dk > uday:
+                            continue
+                    filtered.append(e)
+                events = filtered
+            by = getattr(args, "by", "day")
+            days = getattr(args, "days", 7)
+            mode = getattr(cfg, "cost_mode", "auto")
+            ov = getattr(cfg, "pricing", {})
+            if by == "day":
+                rows = report_mod.daily_ledger(
+                    events, cap or None, now, days=days, mode=mode, overrides=ov
+                )
+            else:
+                rows = report_mod.group_ledger(events, by, now, mode=mode, overrides=ov)
+            secs = [
+                {
+                    "label": r.label,
+                    "tokens": r.tokens,
+                    "cost": r.cost,
+                    "unpriced_tokens": r.unpriced_tokens,
+                    "pct_cap": r.pct_cap,
+                }
+                for r in rows
+            ]
+            sections.append({"profile": pname, "cap": cap, "by": by, "rows": secs})
+    else:
+        try:
+            src = get_source(cfg.source, cfg.source_opts)
+            _f, evs = src.scan({}, now, HIST_SECS)
+            events = [events_mod.normalize(e) for e in evs]
+        except Exception:
+            events = []
+        since_ts = _parse_date(getattr(args, "since", None))
+        until_ts = _parse_date(getattr(args, "until", None))
+        if since_ts is not None or until_ts is not None:
+            filtered = []
+            for e in events:
+                dk = report_mod.day_key(e[0])
+                if since_ts is not None:
+                    sday = report_mod.day_key(since_ts)
+                    if dk < sday:
+                        continue
+                if until_ts is not None:
+                    uday = report_mod.day_key(until_ts)
+                    if dk > uday:
+                        continue
+                filtered.append(e)
+            events = filtered
+        wins = cfg.windows or []
+        cap = report_mod.weekly_cap(wins) or 0
+        by = getattr(args, "by", "day")
+        days = getattr(args, "days", 7)
+        mode = getattr(cfg, "cost_mode", "auto")
+        ov = getattr(cfg, "pricing", {})
+        if by == "day":
+            rows = report_mod.daily_ledger(
+                events, cap or None, now, days=days, mode=mode, overrides=ov
+            )
+        else:
+            rows = report_mod.group_ledger(events, by, now, mode=mode, overrides=ov)
+        secs = [
+            {
+                "label": r.label,
+                "tokens": r.tokens,
+                "cost": r.cost,
+                "unpriced_tokens": r.unpriced_tokens,
+                "pct_cap": r.pct_cap,
+            }
+            for r in rows
+        ]
+        sections.append({"profile": cfg.source, "cap": cap, "by": by, "rows": secs})
+    return sections
 
 
 def _maybe_ingest_rate_limits() -> None:
@@ -369,6 +502,7 @@ def main(argv=None):
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="<command>")
     for name in (
         "forecast",
+        "report",
         "snapshot",
         "statusline",
         "tmux",
@@ -391,6 +525,32 @@ def main(argv=None):
                 "--json",
                 action="store_true",
                 help="emit machine-readable JSON instead of text",
+            )
+        if name == "report":
+            sp.add_argument("--json", action="store_true", help="emit machine-readable JSON")
+            sp.add_argument(
+                "--by",
+                choices=["day", "week", "model"],
+                default="day",
+                help="grouping axis (default: day)",
+            )
+            sp.add_argument(
+                "--since",
+                default=None,
+                metavar="YYYY-MM-DD",
+                help="only include events on/after this local date",
+            )
+            sp.add_argument(
+                "--until",
+                default=None,
+                metavar="YYYY-MM-DD",
+                help="only include events on/before this local date",
+            )
+            sp.add_argument(
+                "--days",
+                type=int,
+                default=7,
+                help="number of days for the default daily view (default: 7)",
             )
         if name == "snapshot":
             sp.add_argument(
@@ -483,6 +643,71 @@ def main(argv=None):
             if cfg.profiles:
                 out = "(multi) " + out
             print(out)
+        return 0
+    if args.cmd == "report":
+        # bad date check (before sections)
+        for flag in ("since", "until"):
+            val = getattr(args, flag, None)
+            if val is not None and _parse_date(val) is None:
+                print(f"report: invalid --{flag} date (use YYYY-MM-DD)", file=sys.stderr)
+                return 2
+        sections = _report_sections(cfg, now, args)
+        # first-run hint only for interactive no-data TTY (like forecast)
+        has_data = any(any(r.get("tokens", 0) > 0 for r in s.get("rows", [])) for s in sections)
+        if not has_data and _is_interactive() and not getattr(args, "json", False):
+            print(_first_run_hint())
+            return 0
+        if getattr(args, "json", False):
+            print(json.dumps({"generated_at": now, "sections": sections}, indent=2))
+            return 0
+        # text render
+        color = colors.color_enabled()
+        for sec in sections:
+            prof = sec.get("profile", "?")
+            by = sec.get("by", "day")
+            rows = sec.get("rows", [])
+            header = (
+                colors.violet(
+                    f"{prof} · {len([r for r in rows if r['label'] != 'TOTAL'])} {by}-ledger", color
+                )
+                if by != "day"
+                else colors.violet(f"{prof} · {getattr(args, 'days', 7)}-day ledger", color)
+            )
+            print(header)
+            # decide columns
+            show_pct = by == "day"
+            # header row
+            cols = ["DAY" if by == "day" else ("WEEK" if by == "week" else "MODEL"), "TOK", "COST"]
+            if show_pct:
+                cols.append("%CAP")
+            # widths rough
+            print("  ".join(cols))
+            print("  ".join(["-" * max(3, len(c)) for c in cols]))
+            for r in rows:
+                is_total = r["label"] == "TOTAL"
+                if is_total:
+                    print("  " + "-" * 30)
+                lab = r["label"]
+                tok = fmt_tokens(r["tokens"])
+                if r["cost"] is None:
+                    cst = "—"
+                else:
+                    cst = f"${r['cost']:,.2f}"
+                line = f"{lab:12}  {tok:>6}  {cst:>10}"
+                if show_pct:
+                    if r["pct_cap"] is not None:
+                        pct_str = colors.gauge(f"{r['pct_cap']:.0f}%", r["pct_cap"], color)
+                        line += f"  {pct_str}"
+                    else:
+                        line += "  —"
+                print(line)
+            # note if all unpriced
+            all_none = all(r["cost"] is None for r in rows if r["tokens"] > 0)
+            if all_none and any(r["tokens"] > 0 for r in rows):
+                print(colors.dim("cost unavailable (cost_mode=off or unpriced models)", color))
+            if not any(r["tokens"] > 0 for r in rows):
+                print(colors.dim(f"no usage data for {prof} in range", color))
+            print()
         return 0
     if args.cmd == "snapshot":
         fs = run_forecast(now, cfg)
