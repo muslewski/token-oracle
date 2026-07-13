@@ -32,6 +32,7 @@ BAR_W = 22  # default/maximum gauge width
 BAR_W_MIN = 6  # narrowest legible gauge
 MIN_BOX = 34  # min box width that still fits "glyph name pct bar reset"
 BOX_MAX = 66  # widest stacked box (unchanged from today)
+BARS_MIN = 16  # min width for borderless slider bars (below this -> compact text)
 
 
 def _clamp(v, lo, hi):
@@ -43,6 +44,13 @@ def _bar_w_for(box_w: int) -> int:
     ~26 cells on 'glyph name<6> pct<4> reset<~7>' plus spacing; the rest is
     the bar, clamped to a legible range."""
     return _clamp(box_w - 26, BAR_W_MIN, BAR_W)
+
+
+def _bars_bar_w_for(w: int) -> int:
+    """Gauge width for a borderless bar row. The row prefix spends 13 cells on
+    '  {label:<5} {pct:>4} '; the rest is the bar, clamped to a legible minimum
+    so the % (which precedes the bar) always survives."""
+    return _clamp(w - 13, 3, BAR_W)
 
 
 _EIGHTHS = "▏▎▍▌▋▊▉"  # 1/8..7/8 left-fraction blocks; a full cell is █
@@ -144,6 +152,8 @@ def _panels_arrangement(groups: dict, w: int):
     if w >= MIN_BOX:
         box_w = _clamp(w, MIN_BOX, BOX_MAX)
         return "stack", box_w, _bar_w_for(box_w)
+    if w >= BARS_MIN:
+        return "bars", w, _bars_bar_w_for(w)
     return "oneline", w, BAR_W_MIN
 
 
@@ -159,6 +169,9 @@ def panel_height(groups: dict, detail: int = 2, w: int = 999) -> int:
     mode, _bw, _barw = _panels_arrangement(groups, w)
     if mode == "oneline":
         return len(groups)  # one compact line per profile
+    if mode == "bars":
+        # header (1) + one row per window + inter-block gap (1), per provider
+        return sum(1 + (len(fs) or 1) + 1 for fs in groups.values())
     if mode == "side":
         n = len(groups[list(groups.keys())[0]])
         return _panel_block_height(n, detail)
@@ -198,6 +211,40 @@ def _compact_profile_line(pname, forecasts, now, enabled, cells=None, width=80) 
         # make the single most-critical item pop with its gauge color
         items.append(c.gauge(text, pct, enabled) if i == 0 else c.dim(text, enabled))
     return _fit_join(prefix, items, width)
+
+
+def _render_profile_bars(pname, forecasts, now, enabled, cells, w, bar_w):
+    """Borderless slider rows for narrow terminals (BARS_MIN <= w < MIN_BOX):
+    a provider header line + one `label pct% bar` row per window. The number
+    precedes the bar (pct-first) so it survives truncation; the bar is exactly
+    `bar_w` cells so each row is exactly `w` cells. No box, no provenance, no
+    glide animation (narrow fallback shows the true pct directly). Source blend
+    matches the box: 5h from local logs, caps from the web cell else local proj."""
+    cells = cells or {}
+    p_canon = "grok" if "grok" in pname.lower() else "claude"
+    icon = _profile_icon(pname)
+    out = [c.violet(f"{icon} {pname.lower()}", enabled)]
+    for f in sorted(forecasts, key=lambda x: x.window):
+        ww = (f.window or "").lower()
+        is_5h = "5h" in ww or "session" in ww or "current" in ww
+        label = "5h" if is_5h else ("wk" if ww in ("weekly", "week") else (ww or "?"))
+        label = label[:5].ljust(5)
+        if bool(getattr(f, "idle", False)):
+            out.append(c.dim(f"  {label} idle", enabled))
+            continue
+        if is_5h:
+            pct = (100.0 * f.used / f.cap) if getattr(f, "cap", 0) else 0.0
+        else:
+            wkey = "weekly" if ww in ("weekly", "week") else ("fable" if ww == "fable" else None)
+            cell = cells.get((p_canon, wkey)) if wkey else None
+            pct = cell.pct if (cell and cell.pct is not None) else f.projected_pct
+        pct = float(pct)
+        pct_str = c.gauge(f"{round(pct)}%".rjust(4), pct, enabled)
+        if enabled:
+            pct_str = f"\033[1m{pct_str}\033[0m"
+        bar = _bar(pct, enabled, bar_w)
+        out.append(f"  {label} {pct_str} {bar}")
+    return out
 
 
 def _row_glyph(cell, is_idle: bool) -> str:
@@ -574,8 +621,12 @@ def render_frame(
                 )
                 out.extend(blk)
                 out.append("")
+        elif mode == "bars":
+            for pn in sorted(pnames):
+                out.extend(_render_profile_bars(pn, groups[pn], now, enabled, cells, box_w, bar_w))
+                out.append("")
         else:
-            # oneline (width too narrow for any box)
+            # oneline (width too narrow for even a minimal bar)
             return compact_fill()
         return out
 
