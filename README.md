@@ -21,6 +21,22 @@
   <sub><b>Live dashboard</b> — real, browser-verified usage for <b>Claude Code and Grok</b>, with time left before each cap. No API keys; reads local logs, optionally verifies against the sites.</sub>
 </p>
 
+## Live usage in your status bar
+
+Wire it once:
+
+```bash
+oracle statusline --install
+```
+
+Claude Code (and tmux) then shows a live headline such as:
+
+```
+◔ 5h 26% · wk 60% · $8 today
+```
+
+(The 5h/wk numbers come from the rate-limit header self-ingest; cost uses local ledger.)
+
 ---
 
 ## Install
