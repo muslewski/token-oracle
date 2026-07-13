@@ -23,6 +23,7 @@
 - **Depends on**: plans/004-atomic-write-hardening.md — DONE (merged at `c0a91bf`); plans/001 — DONE (`e0d1869`+`c278ed4`). All dependencies satisfied.
 - **Category**: direction
 - **Planned at**: commit `d2b4d32`, 2026-07-01; excerpts refreshed at `ada32e9`, 2026-07-02
+- **Executed**: 2026-07-14 — DONE (quality-pass follow-on). `snapshot_writethrough` on Config; forecast/statusline/tmux opportunistic write; SETUP+ADAPTERS docs; 4 tests.
 
 ## Why this matters
 

@@ -272,6 +272,7 @@ class Config:
         default_factory=dict
     )  # multi-sub: {"claude": {"source":.., "windows":..}, "grok": ...}
     live: dict = field(default_factory=dict)  # {"headed": bool} — real (headed) live probing
+    snapshot_writethrough: bool = False  # when true, forecast/statusline/tmux also refresh snapshot
 
     def headed_enabled(self) -> bool:
         return bool(self.live.get("headed"))
@@ -597,6 +598,7 @@ def load_config(path: str | None = None) -> "Config":
         pricing=pricing,
         profiles=norm_profiles,
         live=live,
+        snapshot_writethrough=bool(raw.get("snapshot_writethrough", False)),
     )
 
 

@@ -227,9 +227,21 @@ corrupt cache, etc.).
 
 ## Snapshot staleness
 
-The snapshot file is written only when `oracle snapshot` (or `oracle snapshot
---out`) is run. It is not updated automatically by `oracle forecast` or by the
-engine. Keep it fresh with a cron job, a shell alias, or a tmux
+By default the snapshot file is written only when `oracle snapshot` (or
+`oracle snapshot --out`) is run. Prefer the opt-in write-through flag if you
+already run `forecast` / `statusline` / `tmux` on an interval:
+
+```json
+{
+  "snapshot_writethrough": true
+}
+```
+
+When true, those commands also refresh the snapshot file after computing the
+forecast (best-effort — a write failure does not fail the status bar). The
+explicit `oracle snapshot` command still exits non-zero on failure.
+
+Alternative: keep it fresh with a cron job, a shell alias, or a tmux
 `status-interval` hook.
 
 Example cron (every 5 minutes):

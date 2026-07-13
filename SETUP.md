@@ -112,6 +112,7 @@ built-in `max20` preset above is used.
 | `plan` | string | `"max20"` | Named plan preset (`pro`, `max5`, `max20`) supplying default `windows`; unknown names fall back to `max20` with a reported issue |
 | `cost_mode` | string | `"auto"` | Cost computation mode: `"auto"` (use recorded cost when present, else calculate), `"calculate"` (always calculate from token counts), `"display"` (only ever use recorded cost), or `"off"` (cost tracking disabled) |
 | `pricing` | object | `{}` | Per-model-prefix USD-per-million-token overrides (same shape as the built-in snapshot in `core/pricing.py`); these win over the built-in snapshot |
+| `snapshot_writethrough` | bool | `false` | When true, `forecast` / `statusline` / `tmux` also refresh the snapshot file (kills the need for a 5-minute cron) |
 
 ### Window object
 
@@ -287,8 +288,17 @@ from your wrapper or pipe its effect.
 }
 ```
 
-Then keep the snapshot fresh with a periodic `oracle snapshot` call (e.g. cron,
-a shell hook, or a tmux `status-interval` triggered script).
+Keep the snapshot fresh by enabling write-through in your config (preferred):
+
+```json
+{
+  "snapshot_writethrough": true
+}
+```
+
+Then any `oracle forecast` / `statusline` / `tmux` run also refreshes
+`forecast.json`. Alternatively use a periodic `oracle snapshot` call (cron, a
+shell hook, or a tmux `status-interval` triggered script).
 
 Oracle and sage are fully independent — token forecasting is optional input to
 session awareness, not a hard dependency.

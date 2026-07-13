@@ -13,20 +13,19 @@ import token_oracle.cli.main as cli_main
 from token_oracle.cli.main import main
 
 
-def _cfg(tmp_path, feed_events, now):
+def _cfg(tmp_path, feed_events, now, extra=None):
     feed = tmp_path / "feed.json"
     feed.write_text(json.dumps(feed_events))
+    body = {
+        "source": "generic",
+        "source_opts": {"events_path": str(feed)},
+        "cache_path": str(tmp_path / "cache.json"),
+        "windows": [{"name": "5h", "cap": 1000, "period_secs": 18000}],
+    }
+    if extra:
+        body.update(extra)
     cfg = tmp_path / "cfg.json"
-    cfg.write_text(
-        json.dumps(
-            {
-                "source": "generic",
-                "source_opts": {"events_path": str(feed)},
-                "cache_path": str(tmp_path / "cache.json"),
-                "windows": [{"name": "5h", "cap": 1000, "period_secs": 18000}],
-            }
-        )
-    )
+    cfg.write_text(json.dumps(body))
     return str(cfg)
 
 
@@ -797,3 +796,47 @@ def test_report_no_data_tty_shows_hint(monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "no usage data yet" in out
+
+
+# --- plan 015: snapshot write-through ---
+
+
+def test_statusline_writethrough_writes_snapshot(tmp_path, monkeypatch, capsys):
+    """With snapshot_writethrough, statusline refreshes forecast.json (plan 015)."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 250]], now, extra={"snapshot_writethrough": True})
+    rc = main(["statusline", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    snap = tmp_path / "data" / "token-oracle" / "forecast.json"
+    assert snap.exists()
+    data = json.loads(snap.read_text())
+    assert data["schema"] == 1
+    assert len(data["windows"]) == 1
+    assert data["windows"][0]["used"] == 250
+
+
+def test_statusline_no_writethrough_by_default(tmp_path, monkeypatch):
+    """Default config does not write snapshot on statusline (plan 015)."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 250]], now)
+    rc = main(["statusline", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    snap = tmp_path / "data" / "token-oracle" / "forecast.json"
+    assert not snap.exists()
+
+
+def test_forecast_json_writethrough(tmp_path, monkeypatch, capsys):
+    """forecast --json with write-through: stdout JSON + snapshot file (plan 015)."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 250]], now, extra={"snapshot_writethrough": True})
+    rc = main(["forecast", "--json", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["schema"] == 1
+    assert out["windows"][0]["used"] == 250
+    snap = tmp_path / "data" / "token-oracle" / "forecast.json"
+    assert snap.exists()
+    assert json.loads(snap.read_text())["schema"] == 1

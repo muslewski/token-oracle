@@ -770,6 +770,8 @@ def main(argv=None):
         return 0
     if args.cmd == "forecast":
         fs = run_forecast(now, cfg)
+        if getattr(cfg, "snapshot_writethrough", False):
+            write_snapshot(fs, now)  # best-effort; ignore failure
         if args.json:
             print(json.dumps(build_snapshot(fs, now), indent=2))
         else:
@@ -863,10 +865,16 @@ def main(argv=None):
         _maybe_ingest_rate_limits()
         if getattr(args, "install", False):
             return _statusline_install(force=getattr(args, "force", False))
-        print(_statusline_render(cfg, now, run_forecast(now, cfg), colors.color_enabled()))
+        fs = run_forecast(now, cfg)
+        if getattr(cfg, "snapshot_writethrough", False):
+            write_snapshot(fs, now)  # best-effort; ignore failure
+        print(_statusline_render(cfg, now, fs, colors.color_enabled()))
         return 0
     if args.cmd == "tmux":
-        print(tx.render(run_forecast(now, cfg)))
+        fs = run_forecast(now, cfg)
+        if getattr(cfg, "snapshot_writethrough", False):
+            write_snapshot(fs, now)  # best-effort; ignore failure
+        print(tx.render(fs))
         return 0
     if args.cmd == "doctor":
         print("⏳ oracle doctor — running checks")

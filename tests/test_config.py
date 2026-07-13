@@ -384,3 +384,13 @@ def test_non_object_json_config_records_issue(tmp_path, monkeypatch):
 
     c = load_config(str(cfg_path))
     assert any("not a JSON object" in i for i in c.issues)
+
+
+def test_snapshot_writethrough_flag_parsed(tmp_path):
+    """snapshot_writethrough defaults false; true when set in JSON (plan 015)."""
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"snapshot_writethrough": True}))
+    c = CFG.load_config(str(p))
+    assert c.snapshot_writethrough is True
+    c2 = CFG.load_config(str(tmp_path / "missing.json"))
+    assert c2.snapshot_writethrough is False
