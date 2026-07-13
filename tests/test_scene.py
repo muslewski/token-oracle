@@ -44,14 +44,15 @@ def test_scene_truncates_tall_fill():
 def test_visible_len_and_strip_and_truncate():
     assert visible_len("\033[1m42%\033[0m") == 3
     assert strip_ansi("\033[38;5;141mfoo\033[0m") == "foo"
-    # over-width drops styling and cuts plainly
+    # over-width keeps ANSI styling + appends reset (color-safe, cell-aware trunc)
     long = "\033[1m" + "X" * 100 + "\033[0m"
     reg = Region("w", 1, lambda: [long])
     sc = Scene([reg])
     out = sc.render(10)
     assert len(out) == 1
-    assert len(out[0]) == 10  # plain cut, no escapes left
-    assert "\033" not in out[0]
+    assert strip_ansi(out[0]) == "X" * 10
+    assert out[0].endswith("\033[0m")
+    assert "\033[1m" in out[0]  # opener preserved, then reset appended
 
 
 def test_height_invariance_same_config_shape():

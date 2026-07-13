@@ -10,6 +10,8 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from ..cli.colors import display_width
+
 _ANSI_RE = re.compile(r"\x1b\[[0-9;?]*[a-zA-Z]")
 
 
@@ -21,6 +23,40 @@ def strip_ansi(s: str) -> str:
 def visible_len(s: str) -> int:
     """Visible character length ignoring ANSI escapes."""
     return len(strip_ansi(s))
+
+
+_RESET = "\033[0m"
+
+
+def truncate_display(s: str, width: int) -> str:
+    """Truncate to at most `width` terminal cells, keeping ANSI SGR styling
+    and appending a reset so color never bleeds past the cut. Cell-aware
+    (emoji/CJK = 2 cells), so the result never exceeds `width` on screen."""
+    if display_width(s) <= width:
+        return s
+    out = []
+    cells = 0
+    i = 0
+    had_sgr = False
+    while i < len(s):
+        if s[i] == "\x1b":
+            m = _ANSI_RE.match(s, i)
+            if m:
+                out.append(m.group(0))
+                had_sgr = True
+                i = m.end()
+                continue
+        ch = s[i]
+        w = display_width(ch)
+        if cells + w > width:
+            break
+        out.append(ch)
+        cells += w
+        i += 1
+    res = "".join(out)
+    if had_sgr:
+        res += _RESET
+    return res
 
 
 @dataclass
@@ -56,9 +92,8 @@ class Scene:
             while len(lines) < reg.height:
                 lines.append("")
             for ln in lines:
-                if visible_len(ln) > width:
-                    # drop styling for over-width lines (simplest correct truncation)
-                    ln = strip_ansi(ln)[:width]
+                if display_width(ln) > width:
+                    ln = truncate_display(ln, width)
                 out.append(ln)
         return out
 
