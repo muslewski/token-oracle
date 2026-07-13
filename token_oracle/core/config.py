@@ -39,6 +39,18 @@ def try_get_claude_five_hour_remaining(now: float | None = None) -> float | None
 
         now = _t.time()
 
+    # Own ingested header (works for any user who wires `oracle statusline`).
+    try:
+        from . import ratelimits as _own_rl
+
+        d = _own_rl.five_hour(now)
+        if d and isinstance(d, dict) and not d.get("stale", False):
+            rem = d.get("secs_to_reset")
+            if rem is not None:
+                return float(rem)
+    except Exception:
+        pass
+
     # 1. Try server truth (what the website uses)
     try:
         import sys
@@ -110,6 +122,23 @@ def try_get_claude_five_hour_data(now: float | None = None):
         import time as _t
 
         now = _t.time()
+
+    # Own ingested header (works for any user who wires `oracle statusline`).
+    try:
+        from . import ratelimits as _own_rl
+
+        d = _own_rl.five_hour(now)
+        if d and isinstance(d, dict) and not d.get("stale", False):
+            rem = d.get("secs_to_reset")
+            sp = d.get("used_percentage")
+            if rem is not None:
+                return {
+                    "reset_in_secs": float(rem),
+                    "projected_pct": float(sp) if sp is not None else None,
+                    "source": "server",
+                }
+    except Exception:
+        pass
 
     # Server (exact)
     try:

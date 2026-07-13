@@ -351,3 +351,25 @@ def test_load_config_honors_plausible_external_caps(monkeypatch, tmp_path):
     weekly = next(w for w in c.windows if w.name == "weekly")
     assert weekly.cap == 9200000  # in-band external value honored
     assert not any("rejected" in i for i in c.issues)
+
+
+def test_five_hour_data_prefers_own_snapshot(monkeypatch, tmp_path):
+    """Own ratelimits snapshot is preferred and returns source=server.
+    Must be hermetic: XDG_DATA_HOME + ingest with explicit or default under it.
+    """
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    monkeypatch.delenv("TOKEN_ORACLE_NO_REAL_LIMITS", raising=False)
+    # clear any pytest marker effect on other paths (our ratelimits path is independent)
+    now = 123456.0
+    # ingest using the default_path (honors XDG we set)
+    from token_oracle.core import ratelimits as RL
+
+    RL.ingest(
+        {"five_hour": {"used_percentage": 42.0, "resets_at": now + 7200}},
+        now=now,
+    )
+    d = CFG.try_get_claude_five_hour_data(now)
+    assert d is not None
+    assert d["source"] == "server"
+    assert d["projected_pct"] == 42.0
+    assert "reset_in_secs" in d

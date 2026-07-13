@@ -89,6 +89,25 @@ def _first_run_hint():
     )
 
 
+def _maybe_ingest_rate_limits() -> None:
+    """If Claude Code piped its statusline JSON on stdin, fold the rate_limits
+    header into our snapshot. Silent + never raises (statusline hot path)."""
+    try:
+        if sys.stdin is None or sys.stdin.isatty():
+            return
+        raw = sys.stdin.read()
+        if not raw.strip():
+            return
+        payload = json.loads(raw)
+        rl = payload.get("rate_limits") if isinstance(payload, dict) else None
+        if rl:
+            from ..core import ratelimits as RL
+
+            RL.ingest(rl)
+    except Exception:
+        pass
+
+
 def _doctor_lines(cfg, config_path, color, now):
     avail = available()
 
@@ -294,6 +313,35 @@ def _doctor_lines(cfg, config_path, color, now):
             out.append(colors.dim(live_msg, color))
     except Exception:
         out.append(colors.dim("  live     — status check failed", color))
+
+    # Informational 5h server-truth status from our own ingested header (never affects
+    # the doctor exit code / bad count; present even if no events).
+    try:
+        from ..core import ratelimits as RL
+
+        d = RL.five_hour(now)
+        if d and isinstance(d, dict) and not d.get("stale", False):
+            pct = d.get("used_percentage")
+            obs = d.get("observed_at")
+            if obs is not None:
+                age_s = int(time.time() - float(obs))
+                age_str = f"{age_s}s ago"
+            else:
+                age_str = ""
+            pct_str = f"{float(pct):.0f}%" if isinstance(pct, (int, float)) else "?"
+            out.append(
+                colors.dim(f"  ✓ live 5h truth: ON (server header, {pct_str} · {age_str})", color)
+            )
+        else:
+            out.append(
+                colors.dim(
+                    "  ◌ live 5h truth: OFF — wire `oracle statusline` as your Claude Code "
+                    "statusLine to enable it (see SETUP.md)",
+                    color,
+                )
+            )
+    except Exception:
+        pass
     return out, bad
 
 
@@ -445,6 +493,7 @@ def main(argv=None):
         print(path)
         return 0
     if args.cmd == "statusline":
+        _maybe_ingest_rate_limits()
         print(sl.render(run_forecast(now, cfg)))
         return 0
     if args.cmd == "tmux":

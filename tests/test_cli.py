@@ -1,3 +1,4 @@
+import io
 import json
 import os
 import signal
@@ -186,6 +187,38 @@ def test_init_no_clobber(tmp_path, capsys):
     rc = main(["init", "--config", str(cfg_path), "--force"])
     assert rc == 0
     assert "windows" in json.loads(cfg_path.read_text())
+
+
+def test_statusline_ingests_rate_limits(monkeypatch, tmp_path, capsys):
+    """Statusline command ingests rate_limits from non-tty stdin into ratelimits snapshot.
+    Hermetic: XDG_DATA_HOME + explicit path for assertion; monkeypatched stdin.
+    """
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 250]], now)
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    payload = '{"rate_limits":{"five_hour":{"used_percentage":7.0,"resets_at":9999999999}}}'
+    fake = io.StringIO(payload)
+
+    def _isatty_false():
+        return False
+
+    fake.isatty = _isatty_false
+    monkeypatch.setattr(sys, "stdin", fake)
+
+    rc = main(["statusline", "--config", cfg, "--now", str(now)])
+    assert rc == 0
+    # capture to drain
+    _ = capsys.readouterr()
+
+    from token_oracle.core import ratelimits as RL
+
+    # explicit path to the expected location under our XDG (hermetic)
+    rl_path = str(tmp_path / "token-oracle" / "ratelimits.json")
+    d = RL.five_hour(now, path=rl_path)
+    assert d is not None
+    assert d.get("used_percentage") == 7.0
+    assert d.get("stale") is False
 
 
 def test_clean_requires_yes(tmp_path, capsys, monkeypatch):
