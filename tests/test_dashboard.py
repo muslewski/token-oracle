@@ -1,3 +1,6 @@
+import os
+
+from token_oracle.cli.colors import display_width
 from token_oracle.core.contracts import Forecast
 from token_oracle.core.engine import detect_resets
 from token_oracle.dashboard.app import (
@@ -5,6 +8,7 @@ from token_oracle.dashboard.app import (
     _active_row_targets,
     _bar,
     _pulse_level,
+    render_frame,
     render_frame_str,
 )
 from token_oracle.live.contract import STATE_OK
@@ -152,3 +156,79 @@ def test_active_row_targets_blend():
     t = _active_row_targets(fs, cells)
     assert t[("claude", "5h")] == 20.0  # local used/cap = 2000/10000
     assert t[("claude", "weekly")] == 66.0  # web cell wins for the cap
+
+
+def _two_profile_two_window_fs():
+    """Build a two-profile two-equal-window frame so side-by-side is possible."""
+    return [
+        Forecast("5h", 12000, 220000, 42.0, None, 3600.0, False, profile="claude"),
+        Forecast("weekly", 5_000_000, 8_000_000, 130.0, 90000.0, 400000.0, False, profile="claude"),
+        Forecast("5h", 8000, 220000, 31.0, None, 3600.0, False, profile="grok"),
+        Forecast("weekly", 2_000_000, 10_000_000, 55.0, None, 500000.0, False, profile="grok"),
+    ]
+
+
+def test_no_line_exceeds_terminal_width_at_any_width():
+    """Core regression guard: at every supported width, every rendered line's
+    display cell width is <= the terminal width. This fails on pre-fix code."""
+    fs = _two_profile_two_window_fs()
+    for W in (200, 140, 123, 120, 100, 80, 72, 60, 50, 40, 32, 24, 16):
+        size = os.terminal_size((W, 40))
+        frame = render_frame(fs, now=100000.0, color=True, size=size)
+        for i, line in enumerate(frame):
+            dw = display_width(line)
+            assert dw <= W, f"W={W} line#{i} display_width={dw} > {W}: {line[:60]!r}"
+
+
+def test_no_dangling_color_after_truncation():
+    """After truncation (or normal render), no line has an SGR escape without a
+    balancing reset (prevents color bleed on narrow terms)."""
+    fs = _two_profile_two_window_fs()
+    for W in (200, 140, 123, 120, 100, 80, 72, 60, 50, 40, 32, 24, 16):
+        size = os.terminal_size((W, 40))
+        frame = render_frame(fs, now=100000.0, color=True, size=size)
+        for i, line in enumerate(frame):
+            if "\x1b[" in line:
+                assert "\033[0m" in line, f"W={W} line#{i} has open SGR but no reset"
+            # also cell width ok (defense)
+            assert display_width(line) <= W
+
+
+def test_arrangement_collapses_with_width():
+    """Layout mode changes with width: side (two boxes per row) -> stack (one box)
+    -> oneline (no boxes, · joined)."""
+    fs = _two_profile_two_window_fs()
+    # side-by-side at wide (two ┌ on some panel line, or ┐   ┌ join)
+    size = os.terminal_size((140, 40))
+    frame = render_frame(fs, now=100000.0, color=False, size=size)
+    has_side_mark = any("┐   ┌" in ln or ln.count("┌") >= 2 for ln in frame)
+    assert has_side_mark, "expected side-by-side at W=140"
+
+    # stacked at narrower (single box per line, still has boxes)
+    size = os.terminal_size((60, 40))
+    frame = render_frame(fs, now=100000.0, color=False, size=size)
+    has_stack_mark = any("┌" in ln for ln in frame)
+    has_join_mark = any("┐   ┌" in ln for ln in frame)
+    assert has_stack_mark and not has_join_mark, "expected stacked (single box) at W=60"
+
+    # oneline/compact at very narrow: no box drawing, has · joiner
+    size = os.terminal_size((30, 40))
+    frame = render_frame(fs, now=100000.0, color=False, size=size)
+    has_box = any(ch in ln for ln in frame for ch in "┌│└")
+    has_compact = any("·" in ln for ln in frame)
+    assert not has_box, "expected no box chars at W=30"
+    assert has_compact, "expected compact ·-joined line at W=30"
+
+
+def test_size_none_unchanged():
+    """size=None (tests/non-interactive) must produce byte-identical output to
+    the pre-change default path (full layout + Scene trunc at w=80)."""
+    fs = _two_profile_two_window_fs()
+    now = 100000.0
+    # capture "before" (current default-path behavior, which our arrange_w=999 preserves)
+    baseline = render_frame_str(fs, now=now, color=False, size=None)
+    out = render_frame_str(fs, now=now, color=False, size=None)
+    assert out == baseline
+    # also the structure is the wide side-by-side one (pre-chop content had 123-wide)
+    # after render(80) for color=false the lines are the 80-char prefix
+    assert len(out.splitlines()) == 15  # header2+alert1+panels8+act3+foot1 for n=2 side

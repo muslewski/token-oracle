@@ -28,7 +28,21 @@ from ..live.overlay import overlay_cells, rate_info
 from ..live.store import load_snapshot
 from .scene import Painter, Region, Scene
 
-BAR_W = 22  # balanced for % + bar + reset time to fit boxes without early truncate
+BAR_W = 22  # default/maximum gauge width
+BAR_W_MIN = 6  # narrowest legible gauge
+MIN_BOX = 34  # min box width that still fits "glyph name pct bar reset"
+BOX_MAX = 66  # widest stacked box (unchanged from today)
+
+
+def _clamp(v, lo, hi):
+    return max(lo, min(hi, v))
+
+
+def _bar_w_for(box_w: int) -> int:
+    """Gauge width derived from the box's inner width. The head line spends
+    ~26 cells on 'glyph name<6> pct<4> reset<~7>' plus spacing; the rest is
+    the bar, clamped to a legible range."""
+    return _clamp(box_w - 26, BAR_W_MIN, BAR_W)
 
 
 _EIGHTHS = "▏▎▍▌▋▊▉"  # 1/8..7/8 left-fraction blocks; a full cell is █
@@ -84,23 +98,44 @@ def _panel_block_height(n_windows: int, detail: int = 2) -> int:
     return 2 + (detail + 1) * n
 
 
-def panel_height(groups: dict, detail: int = 2) -> int:
+def _panels_arrangement(groups: dict, w: int):
+    """Decide how panels lay out for terminal width `w`.
+
+    Returns (mode, box_w, bar_w):
+      mode "side"    -> two boxes side by side, each box_w wide, joined by 3 spaces
+      mode "stack"   -> one box_w-wide box per profile, stacked
+      mode "oneline" -> compact one line per profile (no boxes)
+    Never returns a geometry wider than `w`.
+    """
+    pnames = list(groups.keys())
+    two_equal = len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]])
+    if two_equal and w >= 2 * MIN_BOX + 3:
+        box_w = _clamp((w - 3) // 2, MIN_BOX, 60)
+        return "side", box_w, _bar_w_for(box_w)
+    if w >= MIN_BOX:
+        box_w = _clamp(w, MIN_BOX, BOX_MAX)
+        return "stack", box_w, _bar_w_for(box_w)
+    return "oneline", w, BAR_W_MIN
+
+
+def panel_height(groups: dict, detail: int = 2, w: int = 999) -> int:
     """Compute the panels region height for the current groups shape + detail.
 
-    Side-by-side when exactly two profiles with equal window counts: use the
-    block height of one (shorter is padded in render). Stacked otherwise.
-    The value is independent of per-frame data content (only shape + detail).
+    Arrangement (side / stack / oneline) is chosen from width `w` via the shared
+    helper so that panel_height and panels_fill agree on line count for the
+    chosen geometry (fixed-height contract).
     """
     if not groups:
         return _panel_block_height(1, detail)  # (no data) padded block
-    pnames = list(groups.keys())
-    if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
-        n = len(groups[pnames[0]])
+    mode, _bw, _barw = _panels_arrangement(groups, w)
+    if mode == "oneline":
+        return len(groups)  # one compact line per profile
+    if mode == "side":
+        n = len(groups[list(groups.keys())[0]])
         return _panel_block_height(n, detail)
-    total = 0
+    total = 0  # stack
     for _pn, fs in groups.items():
-        n = len(fs) or 1
-        total += _panel_block_height(n, detail)
+        total += _panel_block_height(len(fs) or 1, detail)
         total += 1  # inter-block gap line
     return total
 
@@ -205,7 +240,16 @@ def _active_row_targets(forecasts, cells) -> dict:
 
 
 def _render_profile_block(
-    pname, forecasts, now, enabled, cells=None, width=66, detail=2, anim_pct=None, pulse=None
+    pname,
+    forecasts,
+    now,
+    enabled,
+    cells=None,
+    width=66,
+    detail=2,
+    anim_pct=None,
+    pulse=None,
+    bar_w=BAR_W,
 ):
     """Render a boxed panel. `detail` sets lines per window row (height ladder):
       2 = head + meta + provenance (full), 1 = head + meta, 0 = head only.
@@ -301,7 +345,7 @@ def _render_profile_block(
         plevel = pulse.get(akey, 0.0) if (pulse and akey) else 0.0
         if plevel > 0:
             glyph = _pulse_glyph(glyph, plevel, enabled)
-        bar = _bar(bar_pct, enabled, BAR_W)
+        bar = _bar(bar_pct, enabled, bar_w)
         pct_num = f"{round(display_pct):3d}%"
         is_key = (wname.lower() in ("weekly", "fable")) and (
             ("grok" in pname.lower() and wname.lower() == "weekly")
@@ -384,11 +428,16 @@ def render_frame(
         p = getattr(f, "profile", "default")
         groups.setdefault(p, []).append(f)
 
-    # width: honor explicit size if passed; default wide enough for boxes
+    # width: honor explicit size if passed; default wide enough for boxes.
+    # arrange_w used for layout decision so size=None (w=80 for render) still
+    # picks the pre-change geometry (box 60 side-by-side) => Scene.render(80)
+    # truncation yields byte-identical bytes for the guard test.
     if size is not None and hasattr(size, "columns"):
-        w = max(40, int(getattr(size, "columns", 80)))
+        w = max(1, int(getattr(size, "columns", 80)))
+        arrange_w = w
     else:
         w = 80
+        arrange_w = 999
 
     # Freshest glance number per provider = local 5h current-usage (real-time),
     # so the header chip matches the panel's 5h head (not the slow web scrape).
@@ -444,17 +493,19 @@ def render_frame(
             return [c.dim("(no windows / no data — run with active usage)", enabled)]
         pnames = list(groups.keys())
         out: list[str] = []
-        if len(pnames) == 2 and len(groups[pnames[0]]) == len(groups[pnames[1]]):
+        mode, box_w, bar_w = _panels_arrangement(groups, arrange_w)
+        if mode == "side":
             left = _render_profile_block(
                 pnames[0],
                 groups[pnames[0]],
                 now,
                 enabled,
                 cells,
-                width=60,
+                width=box_w,
                 detail=detail,
                 anim_pct=anim_pct,
                 pulse=pulse,
+                bar_w=bar_w,
             )
             right = _render_profile_block(
                 pnames[1],
@@ -462,17 +513,18 @@ def render_frame(
                 now,
                 enabled,
                 cells,
-                width=60,
+                width=box_w,
                 detail=detail,
                 anim_pct=anim_pct,
                 pulse=pulse,
+                bar_w=bar_w,
             )
             maxl = max(len(left), len(right))
-            left += [" " * 60] * (maxl - len(left))
-            right += [" " * 60] * (maxl - len(right))
+            left += [" " * box_w] * (maxl - len(left))
+            right += [" " * box_w] * (maxl - len(right))
             for lline, rline in zip(left, right, strict=False):
                 out.append(lline + "   " + rline)
-        else:
+        elif mode == "stack":
             for pn in sorted(pnames):
                 blk = _render_profile_block(
                     pn,
@@ -480,13 +532,17 @@ def render_frame(
                     now,
                     enabled,
                     cells,
-                    width=66,
+                    width=box_w,
                     detail=detail,
                     anim_pct=anim_pct,
                     pulse=pulse,
+                    bar_w=bar_w,
                 )
                 out.extend(blk)
                 out.append("")
+        else:
+            # oneline (width too narrow for any box)
+            return compact_fill()
         return out
 
     def compact_fill() -> list[str]:
@@ -520,7 +576,7 @@ def render_frame(
             return [
                 Region("header", HEADER_H, header_fill),
                 Region("alert", ALERT_H, alert_fill),
-                Region("panels", panel_height(groups, 2), lambda: panels_fill(2)),
+                Region("panels", panel_height(groups, 2, arrange_w), lambda: panels_fill(2)),
                 Region("activity", ACTIVITY_H, activity_fill),
                 Region("footer", FOOTER_H, footer_fill),
             ]
@@ -528,14 +584,14 @@ def render_frame(
             return [
                 Region("header", HEADER_H, header_fill),
                 Region("alert", ALERT_H, alert_fill),
-                Region("panels", panel_height(groups, 1), lambda: panels_fill(1)),
+                Region("panels", panel_height(groups, 1, arrange_w), lambda: panels_fill(1)),
                 Region("footer", FOOTER_H, footer_fill),
             ]
         if level == "heads":
             return [
                 Region("header", HEADER_H, header_fill),
                 Region("alert", ALERT_H, alert_fill),
-                Region("panels", panel_height(groups, 0), lambda: panels_fill(0)),
+                Region("panels", panel_height(groups, 0, arrange_w), lambda: panels_fill(0)),
                 Region("footer", FOOTER_H, footer_fill),
             ]
         if level == "oneline":

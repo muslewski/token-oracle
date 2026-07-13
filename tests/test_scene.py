@@ -12,7 +12,7 @@ from token_oracle.dashboard.app import (
     render_frame,
     render_frame_str,
 )
-from token_oracle.dashboard.scene import Region, Scene, strip_ansi, visible_len
+from token_oracle.dashboard.scene import Region, Scene, strip_ansi, truncate_display, visible_len
 from token_oracle.live.contract import STATE_OK
 from token_oracle.live.overlay import LiveCell
 
@@ -44,14 +44,15 @@ def test_scene_truncates_tall_fill():
 def test_visible_len_and_strip_and_truncate():
     assert visible_len("\033[1m42%\033[0m") == 3
     assert strip_ansi("\033[38;5;141mfoo\033[0m") == "foo"
-    # over-width drops styling and cuts plainly
+    # over-width keeps ANSI styling + appends reset (color-safe, cell-aware trunc)
     long = "\033[1m" + "X" * 100 + "\033[0m"
     reg = Region("w", 1, lambda: [long])
     sc = Scene([reg])
     out = sc.render(10)
     assert len(out) == 1
-    assert len(out[0]) == 10  # plain cut, no escapes left
-    assert "\033" not in out[0]
+    assert strip_ansi(out[0]) == "X" * 10
+    assert out[0].endswith("\033[0m")
+    assert "\033[1m" in out[0]  # opener preserved, then reset appended
 
 
 def test_height_invariance_same_config_shape():
@@ -127,3 +128,21 @@ def test_size_none_is_full_layout_unchanged():
     full = len(render_frame(fs, now=100000.0, color=False))
     expected = HEADER_H + ALERT_H + panel_height({"default": fs}) + ACTIVITY_H + FOOTER_H
     assert full == expected
+
+
+def test_truncate_display_keeps_color_and_fits():
+    """truncate_display (new) returns short strings unchanged; over-width ones
+    are cell-width <= target, keep SGR openers, and end with reset."""
+    from token_oracle.cli.colors import display_width as dw
+
+    short = "\033[1m42%\033[0m"
+    assert truncate_display(short, 10) == short
+    assert dw(truncate_display(short, 10)) == 3
+
+    long = "\033[1;31m" + "Z" * 50 + "\033[0m"
+    t = truncate_display(long, 8)
+    assert dw(t) <= 8
+    assert t.endswith("\033[0m")
+    assert "\033[1;31m" in t  # style kept
+    # round trip strip gets the visible prefix
+    assert strip_ansi(t) == "Z" * 8
