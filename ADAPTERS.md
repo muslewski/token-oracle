@@ -81,12 +81,26 @@ class MyProviderSource:
 
 ### Registration
 
-Decorate your class with `@register("name")` before the engine imports it, and
-set `"source": "name"` in `config.json`. The built-in sources register at import
-time by being imported from `token_oracle.sources`.
+Decorate your class with `@register("name")` and set `"source": "name"` in
+`config.json`. Built-in sources register at import time via
+`token_oracle.sources`.
 
-To auto-register a third-party source, import it in your project's entry point
-(or in a `conftest.py` / early startup module) before calling `oracle forecast`.
+**Third-party packages (CLI-usable):** declare an entry point so the CLI can
+discover your adapter without an import hook:
+
+```toml
+# pyproject.toml of e.g. token-oracle-myprovider
+[project.entry-points."token_oracle.sources"]
+my_provider = "my_pkg.my_source"
+```
+
+The value is a module path; importing it must run `@register("my_provider")`
+with the **same name** as the entry point. token-oracle loads entry points
+lazily on `get_source` (a broken plugin cannot break unrelated invocations);
+`available()` / `oracle doctor` list entry-point names without importing them.
+
+**Library mode** still works: import your module (so `@register` runs) before
+calling `forecast()` / `get_source` from Python.
 
 ### Reference implementation — `generic` source (or see `grok.py` / `claude_code.py` for real log parsers)
 

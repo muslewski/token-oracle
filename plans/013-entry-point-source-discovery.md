@@ -22,6 +22,7 @@
 - **Depends on**: plans/002-docs-drift-sweep.md — DONE (merged at `429d53a`); dependency satisfied
 - **Category**: direction
 - **Planned at**: commit `d2b4d32`, 2026-07-01; excerpts verified current at `ada32e9`, 2026-07-02
+- **Executed**: 2026-07-14 — DONE. Lazy entry-point load; available() lists without import; 4 tests; ADAPTERS.md.
 
 ## Why this matters
 
