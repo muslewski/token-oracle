@@ -352,6 +352,78 @@ def _maybe_ingest_rate_limits() -> None:
         pass
 
 
+def _sage_row(now, home=None):
+    """Detect agentic-sage and report link status for the doctor row.
+
+    Fail-open everywhere except a configured-but-dead link to oracle's snapshot.
+    `home` defaults to ~; tests pass a tmp_path-backed home.
+    """
+    if home is None:
+        home = os.path.expanduser("~")
+    candidates = [
+        os.path.join(home, ".claude", "agentic-sage", "config.json"),
+        os.path.join(home, ".claude", "sage", "config.json"),
+    ]
+    sage_cfg_path = next((p for p in candidates if os.path.isfile(p)), None)
+    if sage_cfg_path is None:
+        return ("sage", "agentic-sage not detected (optional)", True)
+
+    snap_default = default_snapshot_path()
+    try:
+        with open(sage_cfg_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if not isinstance(data, dict):
+            return (
+                "sage",
+                "agentic-sage not detected (optional) (unreadable config)",
+                True,
+            )
+        tfp = data.get("tokenForecastPath")
+        if not tfp:
+            return (
+                "sage",
+                f'detected — link it: add "tokenForecastPath": "{snap_default}" to {sage_cfg_path}',
+                True,
+            )
+        linked = os.path.expanduser(str(tfp))
+        default_exp = os.path.expanduser(snap_default)
+        if os.path.normpath(linked) == os.path.normpath(default_exp):
+            if not os.path.isfile(linked):
+                return (
+                    "sage",
+                    "linked but snapshot is missing — run: token-oracle snapshot",
+                    False,
+                )
+            try:
+                mtime = os.path.getmtime(linked)
+            except OSError:
+                return (
+                    "sage",
+                    "linked but snapshot is missing — run: token-oracle snapshot",
+                    False,
+                )
+            age = now - mtime
+            if age > 24 * 3600:
+                return (
+                    "sage",
+                    "linked but snapshot is stale — run: token-oracle snapshot "
+                    "(or enable snapshot_writethrough)",
+                    False,
+                )
+            return ("sage", f"linked via {linked}", True)
+        return (
+            "sage",
+            f"linked to {linked} (not oracle's default snapshot — fine if intentional)",
+            True,
+        )
+    except (OSError, ValueError, TypeError):
+        return (
+            "sage",
+            "agentic-sage not detected (optional) (unreadable config)",
+            True,
+        )
+
+
 def _doctor_lines(cfg, config_path, color, now):
     avail = available()
 
@@ -448,6 +520,7 @@ def _doctor_lines(cfg, config_path, color, now):
         data_row,
         cache_row,
         ("windows", win_desc, (len(cfg.windows) > 0) or multi),
+        _sage_row(now),
     ]
     for issue in cfg.issues:
         rows.append(("issue", issue, False))

@@ -183,7 +183,11 @@ If [agentic-sage](https://github.com/muslewski/agentic-sage) is installed, add
 ```
 
 Then run `oracle snapshot` before each sage session (or on a cron) to keep the
-forecast file fresh.
+forecast file fresh. Prefer enabling `"snapshot_writethrough": true` in oracle
+config so `forecast` / `statusline` / `tmux` keep the file fresh automatically.
+
+Alternatively: run `oracle doctor` — if sage is installed it prints the exact
+`tokenForecastPath` hint to paste, and flags a linked-but-stale snapshot.
 
 ---
 

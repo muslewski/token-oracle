@@ -143,7 +143,19 @@ a % of cap) to signal urgency:
 
 ## Works with agentic-sage
 
-[agentic-sage](https://github.com/muslewski/agentic-sage) is a companion JS tool. token-oracle is provider-agnostic (Claude Code, Grok Build, and generic) and complements agent harnesses by surfacing usage-cap forecasts independently of any AI framework.
+[agentic-sage](https://github.com/muslewski/agentic-sage) is a companion JS tool.
+Division of labor: **oracle** owns tokens, cost, and forecasts; **sage** owns
+sessions, fleet coordination, and guidance. Point sage at oracle's snapshot:
+
+```json
+{
+  "tokenForecastPath": "~/.local/share/token-oracle/forecast.json"
+}
+```
+
+`oracle doctor` detects sage and prints the exact link hint (or flags a stale
+snapshot). Enable `"snapshot_writethrough": true` so forecast/statusline/tmux
+keep the file fresh automatically.
 
 ## Contributing
 

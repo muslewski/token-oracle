@@ -301,4 +301,6 @@ Then any `oracle forecast` / `statusline` / `tmux` run also refreshes
 shell hook, or a tmux `status-interval` triggered script).
 
 Oracle and sage are fully independent — token forecasting is optional input to
-session awareness, not a hard dependency.
+session awareness, not a hard dependency. `oracle doctor` reports the state of
+this link (detected / linked / stale) and prints the exact `tokenForecastPath`
+value to set when sage is present but unlinked.

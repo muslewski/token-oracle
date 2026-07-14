@@ -59,15 +59,26 @@ def test_snapshot_exit_one_on_write_failure(tmp_path, capsys):
     assert "write failed" in captured.err
 
 
-def test_doctor_exit_one_when_no_events(tmp_path):
+def test_doctor_exit_one_when_no_events(tmp_path, monkeypatch):
     now = 100000.0
     cfg = _cfg(tmp_path, [], now)
+    # hermetic: ignore real machine sage install for exit-code asserts
+    monkeypatch.setattr(
+        cli_main,
+        "_sage_row",
+        lambda now, home=None: ("sage", "agentic-sage not detected (optional)", True),
+    )
     assert main(["doctor", "--config", cfg, "--now", str(now)]) == 1
 
 
-def test_doctor_exit_zero_with_events(tmp_path):
+def test_doctor_exit_zero_with_events(tmp_path, monkeypatch):
     now = 100000.0
     cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    monkeypatch.setattr(
+        cli_main,
+        "_sage_row",
+        lambda now, home=None: ("sage", "agentic-sage not detected (optional)", True),
+    )
     assert main(["doctor", "--config", cfg, "--now", str(now)]) == 0
 
 
@@ -840,3 +851,117 @@ def test_forecast_json_writethrough(tmp_path, monkeypatch, capsys):
     snap = tmp_path / "data" / "token-oracle" / "forecast.json"
     assert snap.exists()
     assert json.loads(snap.read_text())["schema"] == 1
+
+
+# --- plan 022: agentic-sage reciprocal detection ---
+
+
+def _patch_sage_home(monkeypatch, home):
+    """Point expanduser("~") and "~/.claude/..." at tmp home for sage detection."""
+    real_expand = os.path.expanduser
+
+    def _expand(p):
+        s = str(p)
+        if s == "~" or s.startswith("~/"):
+            return str(home / s[2:]) if s.startswith("~/") else str(home)
+        return real_expand(p)
+
+    monkeypatch.setattr(os.path, "expanduser", _expand)
+    # default_snapshot_path also uses expanduser / XDG
+    monkeypatch.setenv("XDG_DATA_HOME", str(home / ".local" / "share"))
+
+
+def test_doctor_sage_not_detected(tmp_path, monkeypatch, capsys):
+    now = 100000.0
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    _patch_sage_home(monkeypatch, tmp_path / "home")
+    rc = main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "sage" in out
+    assert "not detected" in out
+    assert rc == 0  # sage absence is not a red row
+
+
+def test_doctor_sage_detected_unlinked(tmp_path, monkeypatch, capsys):
+    now = 100000.0
+    home = tmp_path / "home"
+    sage = home / ".claude" / "agentic-sage"
+    sage.mkdir(parents=True)
+    (sage / "config.json").write_text("{}")
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    _patch_sage_home(monkeypatch, home)
+    rc = main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "tokenForecastPath" in out
+    assert "forecast.json" in out
+    assert rc == 0  # unlinked is fail-open green
+
+
+def test_doctor_sage_linked_fresh(tmp_path, monkeypatch, capsys):
+    now = 100000.0
+    home = tmp_path / "home"
+    sage = home / ".claude" / "agentic-sage"
+    sage.mkdir(parents=True)
+    data_dir = home / ".local" / "share" / "token-oracle"
+    data_dir.mkdir(parents=True)
+    snap = data_dir / "forecast.json"
+    snap.write_text("{}")
+    os.utime(snap, (now, now))
+    (sage / "config.json").write_text(json.dumps({"tokenForecastPath": str(snap)}))
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    _patch_sage_home(monkeypatch, home)
+    rc = main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "linked via" in out
+    assert rc == 0
+
+
+def test_doctor_sage_linked_stale(tmp_path, monkeypatch, capsys):
+    now = 100000.0
+    home = tmp_path / "home"
+    sage = home / ".claude" / "agentic-sage"
+    sage.mkdir(parents=True)
+    data_dir = home / ".local" / "share" / "token-oracle"
+    data_dir.mkdir(parents=True)
+    snap = data_dir / "forecast.json"
+    snap.write_text("{}")
+    # 2 days old
+    old = now - 2 * 86400
+    os.utime(snap, (old, old))
+    (sage / "config.json").write_text(json.dumps({"tokenForecastPath": str(snap)}))
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    _patch_sage_home(monkeypatch, home)
+    rc = main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "stale" in out.lower()
+    assert rc == 1
+
+
+def test_doctor_sage_linked_elsewhere(tmp_path, monkeypatch, capsys):
+    now = 100000.0
+    home = tmp_path / "home"
+    sage = home / ".claude" / "agentic-sage"
+    sage.mkdir(parents=True)
+    other = tmp_path / "other-forecast.json"
+    other.write_text("{}")
+    (sage / "config.json").write_text(json.dumps({"tokenForecastPath": str(other)}))
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    _patch_sage_home(monkeypatch, home)
+    rc = main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "fine if intentional" in out
+    assert rc == 0
+
+
+def test_doctor_sage_corrupt_config(tmp_path, monkeypatch, capsys):
+    now = 100000.0
+    home = tmp_path / "home"
+    sage = home / ".claude" / "agentic-sage"
+    sage.mkdir(parents=True)
+    (sage / "config.json").write_text("not-json{{{")
+    cfg = _cfg(tmp_path, [[now - 100.0, 50]], now)
+    _patch_sage_home(monkeypatch, home)
+    rc = main(["doctor", "--config", cfg, "--now", str(now)])
+    out = capsys.readouterr().out
+    assert "unreadable" in out
+    assert rc == 0  # fail-open

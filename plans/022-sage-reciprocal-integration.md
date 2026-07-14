@@ -21,6 +21,7 @@
   hinted setup actually stay fresh), 021 (wizard hook)
 - **Category**: direction / dx
 - **Planned at**: commit `ada32e9`, 2026-07-02
+- **Executed**: 2026-07-14 — DONE. `_sage_row` + doctor row; 6 hermetic branch tests; README/SETUP/AGENTS docs.
 
 ## Why this matters
 
