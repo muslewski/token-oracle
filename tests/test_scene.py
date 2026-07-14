@@ -146,3 +146,47 @@ def test_truncate_display_keeps_color_and_fits():
     assert "\033[1;31m" in t  # style kept
     # round trip strip gets the visible prefix
     assert strip_ansi(t) == "Z" * 8
+
+
+def test_painter_erases_below_when_frame_shrinks(monkeypatch):
+    """Tab switch Past(tall) → Present(short) must not leave ghost lines.
+
+    Root cause: paint() only did per-line \\033[K and assumed fixed height
+    (plan 034). Tabs produce variable height (past 40+ vs present ~25 vs
+    future ~20); without erase-below, leftover past rows bleed into present.
+    """
+    import io
+    import sys
+
+    from token_oracle.dashboard.scene import Painter
+
+    buf = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", buf)
+    # avoid real terminal size / alt-screen side effects
+    monkeypatch.setattr(
+        "token_oracle.dashboard.scene.shutil.get_terminal_size",
+        lambda fallback=(80, 24): type("S", (), {"columns": 80, "lines": 40})(),
+    )
+
+    p = Painter()
+    p._entered = False  # paint still works without alt screen
+    p._prev_size = (80, 40)
+
+    p.paint(["PAST1", "PAST2", "PAST3", "PAST4", "PAST5"])
+    first = buf.getvalue()
+    buf.seek(0)
+    buf.truncate(0)
+
+    p.paint(["NOW1", "NOW2"])  # shorter frame — must clear leftover PAST3..5
+    second = buf.getvalue()
+
+    # Erase-in-display from cursor (CSI J / CSI 0 J) clears rows below the new frame
+    assert "\033[J" in second or "\033[0J" in second, (
+        f"shorter paint must erase below; got {second!r}"
+    )
+    # Height change → full clear so old+new rows never mash for one frame
+    assert "\033[2J" in second, f"shorter paint must full-clear on height change; got {second!r}"
+    # Still homes cursor and clears EOL on written lines
+    assert "\033[H" in second
+    assert "NOW1" in second and "NOW2" in second
+    assert "PAST5" in first

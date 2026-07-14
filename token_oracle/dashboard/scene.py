@@ -106,12 +106,18 @@ class Painter:
     cursor. Must be called on every exit path (use as context manager).
 
     paint(lines): moves cursor home, erases to EOL per line. Issues a full
-    clear (\033[2J) ONLY on detected terminal size change since last paint.
-    No assumption on line count — caller guarantees fixed height.
+    clear (\\033[2J) ONLY on detected terminal size change since last paint.
+
+    Variable-height frames are allowed (Past/Present/Future tabs differ).
+    After writing the new frame, paint emits \\033[J (erase from cursor to end
+    of screen) so a shorter frame cannot leave ghost lines from the previous
+    taller tab. Plan 034's fixed-height Scene still pads regions; the tab
+    shell is allowed to change total line count between paints.
     """
 
     def __init__(self) -> None:
         self._prev_size: tuple[int, int] | None = None
+        self._prev_line_count: int = 0
         self._entered = False
 
     def __enter__(self) -> "Painter":
@@ -159,14 +165,23 @@ class Painter:
             curr_size = (sz.columns, sz.lines)
         except Exception:
             curr_size = (80, 24)
-        if self._prev_size is None or curr_size != self._prev_size:
-            sys.stdout.write("\033[2J")
-            self._prev_size = curr_size
-        sys.stdout.write("\033[H")
         n = len(lines)
+        size_changed = self._prev_size is None or curr_size != self._prev_size
+        # Height change (tab switch Past↔Present, skeleton→ready) used to leave
+        # ghost rows: plan 034 assumed fixed height. Full clear on height change
+        # avoids a one-frame mash-up of old+new rows; erase-below is the safety net.
+        height_changed = self._prev_line_count > 0 and n != self._prev_line_count
+        if size_changed or height_changed:
+            sys.stdout.write("\033[2J")
+            if size_changed:
+                self._prev_size = curr_size
+        sys.stdout.write("\033[H")
         for i, line in enumerate(lines):
             if i < n - 1:
                 sys.stdout.write(line + "\033[K\n")
             else:
                 sys.stdout.write(line + "\033[K")
+        # CSI J = erase from cursor to end of screen (rows under the new frame).
+        sys.stdout.write("\033[J")
+        self._prev_line_count = n
         sys.stdout.flush()
