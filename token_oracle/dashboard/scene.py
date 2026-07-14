@@ -110,9 +110,9 @@ class Painter:
 
     Variable-height frames are allowed (Past/Present/Future tabs differ).
     After writing the new frame, paint emits \\033[J (erase from cursor to end
-    of screen) so a shorter frame cannot leave ghost lines from the previous
-    taller tab. Plan 034's fixed-height Scene still pads regions; the tab
-    shell is allowed to change total line count between paints.
+    of screen) so a shorter frame cannot leave ghost lines. Full \\033[2J is
+    used on terminal resize or when the caller passes force_clear=True (tab
+    switch) — NOT on every height delta (loading chips must not flash the top).
     """
 
     def __init__(self) -> None:
@@ -157,21 +157,32 @@ class Painter:
         finally:
             self._entered = False
 
-    def paint(self, lines: list[str]) -> None:
+    def paint(self, lines: list[str], *, force_clear: bool = False) -> None:
+        """Repaint. force_clear=True on tab switches (clean slate); otherwise
+        in-place with erase-below so status chips can appear without top flicker.
+        """
         if not lines:
             return
         try:
             sz = shutil.get_terminal_size((80, 24))
             curr_size = (sz.columns, sz.lines)
+            term_rows = max(1, int(sz.lines))
         except Exception:
             curr_size = (80, 24)
+            term_rows = 24
+        # Never write more rows than the terminal: overflow scrolls the alt
+        # buffer and produces "double Past" / glitched tops (Past was ~44 lines
+        # on a 40-row terminal). Keep footer (last line) when we must clip.
+        if len(lines) > term_rows:
+            if term_rows <= 1:
+                lines = lines[:1]
+            elif term_rows == 2:
+                lines = [lines[0], lines[-1]]
+            else:
+                lines = list(lines[: term_rows - 2]) + ["  …"] + [lines[-1]]
         n = len(lines)
         size_changed = self._prev_size is None or curr_size != self._prev_size
-        # Height change (tab switch Past↔Present, skeleton→ready) used to leave
-        # ghost rows: plan 034 assumed fixed height. Full clear on height change
-        # avoids a one-frame mash-up of old+new rows; erase-below is the safety net.
-        height_changed = self._prev_line_count > 0 and n != self._prev_line_count
-        if size_changed or height_changed:
+        if size_changed or force_clear:
             sys.stdout.write("\033[2J")
             if size_changed:
                 self._prev_size = curr_size

@@ -31,7 +31,7 @@ from .keys import CYCLE, LEFT, QUIT, RIGHT, TAB1, TAB2, TAB3
 from .keys import reader as key_reader
 from .past import render_past_sections, top_models_by_day
 from .scene import Painter, Region, Scene
-from .skeleton import render_skeleton, render_stale_banner, spinner_char
+from .skeleton import render_skeleton, spinner_char
 from .store import DashStore
 
 BAR_W = 22  # default/maximum gauge width
@@ -125,8 +125,25 @@ def _wins_from_raw(wraw):
     return wins
 
 
-def _past_sections_for_dash(cfg, now: float, days: int = 14) -> list[dict]:
-    """Build past-tab sections from the on-disk event cache (reuse report core)."""
+def _events_since(evs, cutoff: float) -> list:
+    """Keep only events with ts >= cutoff (cheap prefilter before ledger/cost)."""
+    out = []
+    for e in evs or []:
+        if isinstance(e, (list, tuple)) and len(e) >= 2:
+            try:
+                if float(e[0]) >= cutoff:
+                    out.append(e)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _past_sections_for_dash(cfg, now: float, days: int = 14, cache=None) -> list[dict]:
+    """Build past-tab sections from the on-disk event cache (reuse report core).
+
+    Prefilters events to the last `days` so cost_summary does not walk 9 weeks.
+    Multi-profile: skip empty profiles so the tab does not look duplicated.
+    """
     from ..core import report as report_mod
     from ..core.cache import load_cache
     from ..core.engine import cached_events
@@ -134,22 +151,28 @@ def _past_sections_for_dash(cfg, now: float, days: int = 14) -> list[dict]:
     mode = getattr(cfg, "cost_mode", "auto") or "auto"
     overrides = getattr(cfg, "pricing", None) or {}
     sections: list[dict] = []
+    cutoff = now - max(1, int(days)) * 86400.0 - 86400.0  # +1d TZ slack
 
     if getattr(cfg, "profiles", None):
-        try:
-            cache = load_cache(getattr(cfg, "cache_path", "") or "") or {}
-        except Exception:
-            cache = {}
+        if cache is None:
+            try:
+                cache = load_cache(getattr(cfg, "cache_path", "") or "") or {}
+            except Exception:
+                cache = {}
         profiles_cache = cache.get("profiles") if isinstance(cache, dict) else {}
         if not isinstance(profiles_cache, dict):
             profiles_cache = {}
         for pname in sorted(cfg.profiles.keys()):
             pdef = cfg.profiles.get(pname) or {}
             slc = profiles_cache.get(pname) or {}
-            evs = (slc.get("events") if isinstance(slc, dict) else None) or []
+            raw = (slc.get("events") if isinstance(slc, dict) else None) or []
+            evs = _events_since(raw, cutoff)
             wins = _wins_from_raw(pdef.get("windows") or cfg.windows)
             cap = report_mod.weekly_cap(wins) or 0
             rows = report_mod.daily_ledger(evs, cap, now, days=days, mode=mode, overrides=overrides)
+            total = next((r for r in rows if getattr(r, "label", None) == "TOTAL"), None)
+            if total is not None and int(getattr(total, "tokens", 0) or 0) == 0:
+                continue
             sections.append(
                 {
                     "profile": pname,
@@ -161,9 +184,10 @@ def _past_sections_for_dash(cfg, now: float, days: int = 14) -> list[dict]:
             return sections
 
     try:
-        evs = cached_events(cfg) or []
+        raw = cached_events(cfg) or []
     except Exception:
-        evs = []
+        raw = []
+    evs = _events_since(raw, cutoff)
     cap = report_mod.weekly_cap(getattr(cfg, "windows", None) or []) or 0
     rows = report_mod.daily_ledger(evs, cap, now, days=days, mode=mode, overrides=overrides)
     sections.append(
@@ -176,17 +200,22 @@ def _past_sections_for_dash(cfg, now: float, days: int = 14) -> list[dict]:
     return sections
 
 
-def _future_extras(cfg, now: float):
-    """Return (profile_list, cost_line) for the future tab from cache."""
+def _future_extras(cfg, now: float, cache=None, events=None):
+    """Return (profile_list, cost_line). Reuse cache/events when the worker has them."""
     from ..core import pricing as pricing_mod
     from ..core.cache import load_cache
     from ..core.engine import cached_events
 
+    if cache is None:
+        try:
+            cache = load_cache(getattr(cfg, "cache_path", "") or "") or {}
+        except Exception:
+            cache = {}
+
     profile = None
     try:
-        cache = load_cache(getattr(cfg, "cache_path", "") or "") or {}
-        profile = cache.get("profile") or None
-        if not profile and isinstance(cache.get("profiles"), dict):
+        profile = (cache or {}).get("profile") or None
+        if not profile and isinstance((cache or {}).get("profiles"), dict):
             for slc in cache["profiles"].values():
                 if isinstance(slc, dict) and slc.get("profile"):
                     profile = slc.get("profile")
@@ -198,9 +227,9 @@ def _future_extras(cfg, now: float):
     mode = getattr(cfg, "cost_mode", "auto") or "auto"
     if mode != "off":
         try:
-            evs = cached_events(cfg) or []
-            cutoff = now - 7 * 86400
-            recent = [e for e in evs if isinstance(e, (list, tuple)) and e[0] >= cutoff]
+            if events is None:
+                events = cached_events(cfg) or []
+            recent = _events_since(events, now - 7 * 86400)
             summary = pricing_mod.cost_summary(recent, mode, getattr(cfg, "pricing", None) or {})
             usd = summary.get("usd")
             if recent and summary.get("unpriced_tokens", 0) == sum(
@@ -1074,15 +1103,24 @@ def run(cfg):
             pass
 
     def _data_worker():
-        """Heavy path off the UI thread. Publishes whenever a piece finishes."""
+        """Heavy path off the UI thread. Present first, then past/future.
+
+        Stale-while-revalidate: once a tab has data, refreshes are silent
+        (no loading banner) so height does not thrash and the top does not flash.
+        One load_cache serves both past and future extras.
+        """
+        from ..core.cache import load_cache
+
         past_every = TAB_DATA_TTL
         last_past_t = 0.0
-        # First cycle: present first so the home tab fills ASAP, then past/future.
         while not stop.is_set():
             cycle_start = time.time()
             now = cycle_start
-            # --- present (forecast) ---
-            store.set_loading("present", True)
+            snap0 = store.snapshot()
+
+            # --- present (forecast) — publish ASAP for instant home tab ---
+            if not snap0.has_present:
+                store.set_loading("present", True)
             try:
                 prev = store.take_prev_forecasts()
                 fs = run_forecast(now, cfg)
@@ -1100,29 +1138,41 @@ def run(cfg):
                 store.publish_error(f"forecast failed: {e}")
                 store.set_loading("present", False)
 
-            # --- past + future (cheaper than cold forecast but still multi-second) ---
-            if (now - last_past_t) >= past_every or not store.snapshot().has_past:
-                store.set_loading("past", True)
-                store.set_loading("future", True)
+            # --- past + future (shared cache; silent if already shown once) ---
+            need_aux = (now - last_past_t) >= past_every or not store.snapshot().has_past
+            if need_aux:
+                had_past = store.snapshot().has_past
+                if not had_past:
+                    store.set_loading("past", True)
+                    store.set_loading("future", True)
                 try:
-                    sections = _past_sections_for_dash(cfg, now, days=PAST_DAYS)
+                    cache = load_cache(getattr(cfg, "cache_path", "") or "") or {}
+                except Exception:
+                    cache = {}
+                try:
+                    sections = _past_sections_for_dash(cfg, now, days=PAST_DAYS, cache=cache)
                     store.publish_past(sections)
                 except Exception:
                     store.publish_past([])
                 try:
-                    prof, cline = _future_extras(cfg, now)
+                    # Flatten profile events once for cost pace (avoid 2nd full load)
+                    flat = []
+                    if isinstance(cache.get("profiles"), dict):
+                        for slc in cache["profiles"].values():
+                            if isinstance(slc, dict):
+                                flat.extend(slc.get("events") or [])
+                    flat.extend(cache.get("events") or [])
+                    prof, cline = _future_extras(cfg, now, cache=cache, events=flat)
                     store.publish_future(prof, cline)
                 except Exception:
                     store.publish_future(None, None)
                 last_past_t = now
             else:
-                # keep flags honest when we skip a heavy past rebuild
                 store.set_loading("past", False)
                 store.set_loading("future", False)
 
-            # Pace: don't spin-burn CPU; still refresh often enough for live feel.
-            # If forecast took 12s, we don't sleep extra; if it was fast, wait ~1s.
             elapsed = time.time() - cycle_start
+            # Present-only cycles can be snappy; still yield the GIL.
             stop.wait(max(0.2, 1.0 - elapsed))
 
     if interactive:
@@ -1134,6 +1184,7 @@ def run(cfg):
     prev_target: dict = {}
     pulse_start: dict = {}
     spin_i = 0
+    prev_tab = active_tab
 
     key_cm = kr if kr is not None else _NullCM()
     try:
@@ -1155,6 +1206,10 @@ def run(cfg):
                                 stop.set()
                                 return 0
                             active_tab = nxt
+
+                    tab_changed = active_tab != prev_tab
+                    if tab_changed:
+                        prev_tab = active_tab
 
                     if not interactive:
                         # Piped path: original sync present-only loop.
@@ -1179,9 +1234,12 @@ def run(cfg):
                                 w,
                                 enabled,
                                 spin=spin,
-                                hint="reading local logs (can take a few seconds on large history)",
+                                hint="reading local logs (first load can take a bit)…",
                             )
-                            painter.paint(_paint_tab_frame(active_tab, body, w, enabled))
+                            painter.paint(
+                                _paint_tab_frame(active_tab, body, w, enabled),
+                                force_clear=tab_changed,
+                            )
                         else:
                             curr = st.forecasts
                             cells = st.cells
@@ -1231,10 +1289,8 @@ def run(cfg):
                             if st.reset_msg and now < st.reset_until and len(base) > HEADER_H:
                                 base[HEADER_H] = c.pulse(c.violet(st.reset_msg, enabled), enabled)
                                 animating = True
-                            if st.loading_present and len(base) > 1:
-                                # stale-while-revalidate chip under tab bar
-                                base.insert(1, render_stale_banner(enabled, spin))
-                            painter.paint(base)
+                            # No loading banner insert after first paint (height thrash)
+                            painter.paint(base, force_clear=tab_changed)
                     elif active_tab == "past":
                         if not st.has_past:
                             body = render_skeleton(
@@ -1252,9 +1308,11 @@ def run(cfg):
                                 days=PAST_DAYS,
                                 show_cost=show_cost,
                             )
-                            if st.loading_past:
-                                body = [render_stale_banner(enabled, spin)] + body
-                        painter.paint(_paint_tab_frame(active_tab, body, w, enabled))
+                            # Silent SWR — do not prepend banner (was +1 line → flicker)
+                        painter.paint(
+                            _paint_tab_frame(active_tab, body, w, enabled),
+                            force_clear=tab_changed,
+                        )
                     else:  # future
                         if not st.has_future and not st.has_present:
                             body = render_skeleton(
@@ -1273,9 +1331,10 @@ def run(cfg):
                                 enabled,
                                 cost_line=st.cost_line,
                             )
-                            if st.loading_future or st.loading_present:
-                                body = [render_stale_banner(enabled, spin)] + body
-                        painter.paint(_paint_tab_frame(active_tab, body, w, enabled))
+                        painter.paint(
+                            _paint_tab_frame(active_tab, body, w, enabled),
+                            force_clear=tab_changed,
+                        )
 
                     # Short UI tick — keys polled again next loop. Keep ~15–20 fps
                     # when animating; ~10 fps idle is plenty for a live clock.

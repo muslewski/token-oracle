@@ -180,13 +180,43 @@ def test_painter_erases_below_when_frame_shrinks(monkeypatch):
     p.paint(["NOW1", "NOW2"])  # shorter frame — must clear leftover PAST3..5
     second = buf.getvalue()
 
-    # Erase-in-display from cursor (CSI J / CSI 0 J) clears rows below the new frame
+    # Erase-in-display from cursor (CSI J) clears rows below without flashing top
     assert "\033[J" in second or "\033[0J" in second, (
         f"shorter paint must erase below; got {second!r}"
     )
-    # Height change → full clear so old+new rows never mash for one frame
-    assert "\033[2J" in second, f"shorter paint must full-clear on height change; got {second!r}"
-    # Still homes cursor and clears EOL on written lines
+    # Height-only change must NOT full-clear (loading chips used to thrash the top)
+    assert "\033[2J" not in second, f"in-tab height change must not 2J; got {second!r}"
     assert "\033[H" in second
     assert "NOW1" in second and "NOW2" in second
     assert "PAST5" in first
+
+    buf.seek(0)
+    buf.truncate(0)
+    p.paint(["TAB"], force_clear=True)
+    tabbed = buf.getvalue()
+    assert "\033[2J" in tabbed, "force_clear (tab switch) must full-clear"
+
+
+def test_painter_clips_to_terminal_rows(monkeypatch):
+    """Overflowing frames must not scroll the alt buffer (Past was 44 > 40 rows)."""
+    import io
+    import sys
+
+    from token_oracle.dashboard.scene import Painter
+
+    buf = io.StringIO()
+    monkeypatch.setattr(sys, "stdout", buf)
+    monkeypatch.setattr(
+        "token_oracle.dashboard.scene.shutil.get_terminal_size",
+        lambda fallback=(80, 24): type("S", (), {"columns": 80, "lines": 10})(),
+    )
+    p = Painter()
+    p._prev_size = (80, 10)
+    tall = [f"L{i}" for i in range(20)]
+    p.paint(tall)
+    out = buf.getvalue()
+    # only ~10 content lines should be written (clipped)
+    assert out.count("\n") <= 12
+    assert "L0" in out
+    assert "L19" in out  # footer kept
+    assert "…" in out or "L8" in out

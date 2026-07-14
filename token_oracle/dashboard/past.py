@@ -99,6 +99,7 @@ def render_past(
     tops: dict[str, str] | None = None,
     show_cost: bool = True,
     title: str | None = None,
+    hide_empty_days: bool = True,
 ) -> list[str]:
     """Pure past panel lines.
 
@@ -106,11 +107,15 @@ def render_past(
       width < 72  — drop mini-bar
       width < 100 — drop top: model column
     Cost column omitted when show_cost is False (cost_mode=off).
+    hide_empty_days: skip 0-token calendar days so multi-profile ledgers fit
+    a normal terminal without scrolling (Past glitch root cause).
     """
     from ..cli.colors import display_width
 
     tops = tops or {}
     day_rows = [r for r in (rows or []) if getattr(r, "label", None) != "TOTAL"]
+    if hide_empty_days:
+        day_rows = [r for r in day_rows if int(getattr(r, "tokens", 0) or 0) > 0]
     total = next((r for r in (rows or []) if getattr(r, "label", None) == "TOTAL"), None)
     max_tok = max((int(getattr(r, "tokens", 0) or 0) for r in day_rows), default=0)
 
