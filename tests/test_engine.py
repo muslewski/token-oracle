@@ -151,6 +151,74 @@ def test_forecast_multi_profiles(tmp_path):
     assert ws.get("weekly") == 200
 
 
+def test_multi_forecast_skips_save_when_aggregate_fresh(monkeypatch, tmp_path):
+    """Warm multi-profile path must not rewrite the cache every call.
+
+    Root cause (dash lag): multi-profile forecast always set changed=True and
+    save_cache()'d the whole cache (12MB+ / ~5s on real machines) even when
+    AGGREGATE_INTERVAL had not elapsed. Single-source path already gates save
+    on do_agg; multi must match.
+    """
+    from token_oracle.core import engine as ENG
+
+    now = 100_000.0
+    feed1 = tmp_path / "c.json"
+    feed2 = tmp_path / "g.json"
+    feed1.write_text(json.dumps([[now - 100, 100]]))
+    feed2.write_text(json.dumps([[now - 50, 200]]))
+    cache_path = tmp_path / "cache.json"
+    # Pre-warm: both profiles already aggregated at `now` (within interval).
+    warm = {
+        "lastAggregate": now,
+        "files": {},
+        "events": [],
+        "profile": [],
+        "profiles": {
+            "claude": {
+                "files": {},
+                "events": [[now - 100, 100, "", 0, 0, 0, 0, None]],
+                "profile": [],
+                "lastAggregate": now,
+            },
+            "grok": {
+                "files": {},
+                "events": [[now - 50, 200, "", 0, 0, 0, 0, None]],
+                "profile": [],
+                "lastAggregate": now,
+            },
+        },
+    }
+    cache_path.write_text(json.dumps(warm))
+    cfg = Config(
+        source="generic",
+        cache_path=str(cache_path),
+        windows=[Window("wk", 1000, 604800)],
+        profiles={
+            "claude": {
+                "source": "generic",
+                "source_opts": {"events_path": str(feed1)},
+                "windows": [{"name": "5h", "cap": 1000, "period_secs": 18000}],
+            },
+            "grok": {
+                "source": "generic",
+                "source_opts": {"events_path": str(feed2)},
+                "windows": [{"name": "weekly", "cap": 10000, "period_secs": 604800}],
+            },
+        },
+    )
+    saves = {"n": 0}
+    real_save = ENG.save_cache
+
+    def counting_save(cache, path):
+        saves["n"] += 1
+        return real_save(cache, path)
+
+    monkeypatch.setattr(ENG, "save_cache", counting_save)
+    out = forecast(now + 1.0, cfg)  # still within AGGREGATE_INTERVAL of lastAggregate
+    assert len(out) == 2
+    assert saves["n"] == 0, f"warm multi forecast must not save_cache; got {saves['n']}"
+
+
 def test_multi_forecast_and_detect(tmp_path):
     feed = tmp_path / "f.json"
     now = 100000.0

@@ -130,13 +130,18 @@ def forecast(now, config=None):
                 cslice = prof_cache.setdefault(
                     pname, {"files": {}, "events": [], "profile": [], "lastAggregate": 0}
                 )
+                prev_agg = cslice.get("lastAggregate", 0)
                 cslice, fs = _forecast_one(now, pcfg["source"], pcfg["source_opts"], wraw, cslice)
                 prof_cache[pname] = cslice
                 for f in fs:
                     if getattr(f, "profile", "default") == "default":
                         object.__setattr__(f, "profile", pname)  # dataclass frozen-safe
                     results.append(f)
-                changed = True
+                # Only persist when a profile actually re-aggregated. Unconditional
+                # save_cache of a multi-MB cache was ~5s per call and made dash lag
+                # even after UI/data decoupling (single-source path already gates).
+                if cslice.get("lastAggregate", 0) != prev_agg:
+                    changed = True
             if changed:
                 cache["lastAggregate"] = now
                 save_cache(cache, cfg.cache_path)
