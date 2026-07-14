@@ -7,8 +7,10 @@
 #   - To publish after release-please merges: a human pushes the tag manually
 #     (`git pull --tags && git push origin vX.Y.Z`) which triggers the push:tags path below, OR
 #     runs this workflow via the Actions UI (workflow_dispatch).
-#   - For fully automated publishing without the manual push, configure release-please with a
-#     PAT or a GitHub App token that has sufficient permissions to trigger downstream workflows.
+#   - release-please runs with RELEASE_PLEASE_TOKEN (repo secret, fine-grained PAT); tags it
+#     pushes therefore trigger this workflow automatically. If the secret is absent or expired,
+#     the fallback GITHUB_TOKEN applies and a human must push the tag manually
+#     (`git pull --tags && git push origin vX.Y.Z`) or run this workflow via workflow_dispatch.
 name: Publish to PyPI
 
 on:
@@ -29,12 +31,12 @@ jobs:
       id-token: write
       contents: read
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: "3.12"
       - run: pip install build
       - run: python -m build
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           skip-existing: true

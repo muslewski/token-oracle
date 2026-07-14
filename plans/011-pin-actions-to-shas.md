@@ -20,6 +20,7 @@
 - **Depends on**: none (execute after Plan 009 to avoid a trivial merge conflict in the same files)
 - **Category**: security
 - **Planned at**: commit `d2b4d32`, 2026-07-01
+- **Executed**: 2026-07-14 — DONE. All `uses:` pinned to 40-char SHAs with version comments.
 - **Advisor note**: the audit's verdict was "not worth doing *now*" — dependabot already watches these actions weekly and the repo has no secrets an action could exfiltrate beyond the OIDC publish credential. The operator opted to plan it anyway. Treat as low-urgency hardening.
 
 ## Why this matters

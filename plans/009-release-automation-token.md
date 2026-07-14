@@ -20,6 +20,7 @@
 - **Depends on**: none. **Requires one human action** (create a PAT) — see Step 1.
 - **Category**: dx
 - **Planned at**: commit `d2b4d32`, 2026-07-01
+- **Executed**: 2026-07-14 — DONE (YAML). Owner must confirm `RELEASE_PLEASE_TOKEN` secret exists; fallback keeps manual-tag path.
 
 ## Why this matters
 
