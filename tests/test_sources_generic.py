@@ -1,5 +1,7 @@
 import json
 
+import pytest
+
 from token_oracle.sources.base import available, get_source
 
 
@@ -112,7 +114,7 @@ def test_broken_entry_point_falls_through_to_keyerror(monkeypatch):
     )
     B._REGISTRY.pop("broken", None)
     try:
-            with pytest.raises(KeyError) as ei:
+        with pytest.raises(KeyError) as ei:
             get_source("broken")
         assert "broken" in str(ei.value)
     finally:
