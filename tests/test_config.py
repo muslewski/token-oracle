@@ -394,3 +394,74 @@ def test_snapshot_writethrough_flag_parsed(tmp_path):
     assert c.snapshot_writethrough is True
     c2 = CFG.load_config(str(tmp_path / "missing.json"))
     assert c2.snapshot_writethrough is False
+
+
+# --- plan 021 config discovery ------------------------------------------------
+
+
+def test_find_config_env_wins_over_project(monkeypatch, tmp_path):
+    env_cfg = tmp_path / "env.json"
+    env_cfg.write_text("{}")
+    proj = tmp_path / "repo"
+    proj.mkdir()
+    (proj / CFG.PROJECT_CONFIG_NAME).write_text(json.dumps({"plan": "pro"}))
+    monkeypatch.setenv("TOKEN_ORACLE_CONFIG", str(env_cfg))
+    monkeypatch.chdir(proj)
+    assert CFG.find_config_path() == str(env_cfg)
+    assert CFG.config_provenance() == "env"
+
+
+def test_find_config_project_in_cwd(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKEN_ORACLE_CONFIG", raising=False)
+    (tmp_path / CFG.PROJECT_CONFIG_NAME).write_text(json.dumps({"plan": "pro"}))
+    monkeypatch.chdir(tmp_path)
+    assert CFG.find_config_path() == str(tmp_path / CFG.PROJECT_CONFIG_NAME)
+    assert CFG.config_provenance() == "project"
+    c = CFG.load_config()
+    assert c.plan == "pro"
+
+
+def test_find_config_project_two_levels_up(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKEN_ORACLE_CONFIG", raising=False)
+    root = tmp_path / "root"
+    nested = root / "a" / "b"
+    nested.mkdir(parents=True)
+    marker = root / CFG.PROJECT_CONFIG_NAME
+    marker.write_text(json.dumps({"plan": "max5"}))
+    monkeypatch.chdir(nested)
+    assert CFG.find_config_path() == str(marker)
+
+
+def test_find_config_stops_at_home(monkeypatch, tmp_path):
+    """Marker above home must not be found from a repo under home."""
+    monkeypatch.delenv("TOKEN_ORACLE_CONFIG", raising=False)
+    home = tmp_path / "home" / "user"
+    repo = home / "repo"
+    repo.mkdir(parents=True)
+    above = tmp_path / "home" / CFG.PROJECT_CONFIG_NAME
+    above.write_text(json.dumps({"plan": "pro"}))
+    # make expanduser("~") and HOME point at fake home
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(os.path, "expanduser", lambda p: str(home) if p == "~" else p)
+    monkeypatch.chdir(repo)
+    # also stub XDG so default_config_path is under tmp
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    found = CFG.find_config_path()
+    assert found != str(above)
+    assert found == CFG.default_config_path()
+    assert CFG.config_provenance() == "global"
+
+
+def test_find_config_nothing_returns_global(monkeypatch, tmp_path):
+    monkeypatch.delenv("TOKEN_ORACLE_CONFIG", raising=False)
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.chdir(tmp_path / "work" if False else tmp_path)
+    (tmp_path / "work").mkdir(exist_ok=True)
+    monkeypatch.chdir(tmp_path / "work")
+    assert CFG.find_config_path() == CFG.default_config_path()
+    assert CFG.config_provenance() == "global"
+
+
+def test_config_provenance_flag():
+    assert CFG.config_provenance("/some/path.json") == "--config"

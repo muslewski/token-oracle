@@ -293,7 +293,7 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 018 | TUI shell — alt screen, key input, past/present/future tabs | P1 | L | — (after 034) | DONE — 2026-07-14; keys.py+screen.py, Past/Present/Future tabs on Painter scene, present = 034 panels; placeholders for 019/020 |
 | 019 | Past tab + `oracle report` (daily ledger, `--json`) | P2 | M | 016, 017, 018 | TODO |
 | 020 | Future tab — forecast detail, prophecy lines, 24h sparkline | P2 | M | 018 (soft: 017, 012) | TODO |
-| 021 | Interactive `init` wizard + per-project config discovery | P2 | M | 008, 017 | TODO |
+| 021 | Interactive `init` wizard + per-project config discovery | P2 | M | 008, 017 | DONE — 2026-07-14; find_config_path + doctor provenance + TTY wizard; agents use --preset/--config |
 | 022 | agentic-sage reciprocal integration (doctor detect + hint) | P2 | S | — (soft: 015, 021) | DONE — implemented 2026-07-14; doctor sage row + 6 branch tests + docs |
 | 023 | P90 auto-detected personal caps (`"cap": "auto"`) | P3 | M | — (soft: 012) | TODO |
 | 024 | Design-exploration workspace + shared brief (`explore/`) | P2 | S | — | TODO |

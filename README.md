@@ -65,12 +65,15 @@ pip install token-oracle       # pip
 ## Quickstart
 
 ```bash
+token-oracle init         # guided setup (or --preset max20 for non-interactive)
 token-oracle forecast     # live forecast — time left before your cap
 token-oracle dash         # full-screen TUI — Past / Present / Future tabs
 token-oracle doctor       # check configuration + data sources
 ```
 
-Run `token-oracle --help` to list all subcommands.
+Config can live globally (`~/.config/token-oracle/config.json`) or per-project
+(`.token-oracle.json` walking up from the cwd). Run `token-oracle --help` for
+all subcommands.
 
 ## How it works
 
@@ -88,11 +91,12 @@ Multi-subscription: put `"profiles": {"claude": {...}, "grok": {...}}` in config
 
 ## Parts & options
 
-All subcommands accept `--config FILE` (default: `~/.config/token-oracle/config.json`).
+All subcommands accept `--config FILE`. Without it, resolution is
+`$TOKEN_ORACLE_CONFIG` → `.token-oracle.json` (cwd walk-up) → XDG global.
 
 | Subcommand | Extra flags | Description |
 |------------|-------------|-------------|
-| `init` | `--preset`, `--force` | Write a starter config (non-clobbering) |
+| `init` | `--preset`, `--force` | Starter config (TTY wizard if no flags; non-clobbering) |
 | `forecast` | `--json` | Print forecast (default: statusline format) |
 | `snapshot` | `--out FILE` | Write snapshot JSON to a file, print the path |
 | `statusline` | — | Emit plain-text/ANSI statusline fragment |

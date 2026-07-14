@@ -75,16 +75,52 @@ for f in forecasts:
 
 ## Configuration
 
-Run `token-oracle init` to write a starter config at the default location
-(non-clobbering — pass `--force` to overwrite, or `--config FILE` for a
-custom path). Edit the resulting file to customize sources or windows; the
-format is documented below.
+### Guided setup
+
+On a real TTY, bare `token-oracle init` opens a short wizard (plan preset,
+global vs project scope, cost display). Non-interactive / agent use should
+pass flags instead:
+
+```bash
+token-oracle init --preset max20              # global XDG config
+token-oracle init --preset pro --config ./.token-oracle.json
+token-oracle init --force                     # overwrite existing
+```
+
+Example wizard transcript:
+
+```
+🔮 token-oracle setup
+
+1) Which plan are you on?
+   1. max20      (5h cap ≈ 220k tokens)   [default]
+   2. max5       (5h cap ≈ 88k tokens)
+   3. pro        (5h cap ≈ 19k tokens)
+   …
+   choice [1]:
+
+2) Where should config live?
+   1. global — ~/.config/token-oracle/config.json (all repos)  [default]
+   2. this project — ./.token-oracle.json (wins over global here)
+
+3) Show cost estimates in USD? [Y/n]
+```
 
 ### File location
 
-Default: `~/.config/token-oracle/config.json`  
-Respects `$XDG_CONFIG_HOME` when set.  
-Override at runtime: `oracle forecast --config /path/to/config.json`
+Config resolution order (first hit wins; no merging across scopes):
+
+1. `--config FILE` on the CLI
+2. `$TOKEN_ORACLE_CONFIG` environment variable
+3. `.token-oracle.json` in the current directory or any ancestor (stops at
+   `$HOME` / filesystem root; hard cap 40 levels)
+4. Global XDG: `~/.config/token-oracle/config.json` (respects `$XDG_CONFIG_HOME`)
+
+`oracle doctor` prints which rule won as a dim suffix:
+`(--config)`, `(env)`, `(project)`, or `(global)`.
+
+`oracle clean` removes the global config path (or `--config`); it does not
+walk up to delete project files — remove `.token-oracle.json` yourself if needed.
 
 Cache default: `~/.local/share/token-oracle/cache.json`  
 Snapshot default: `~/.local/share/token-oracle/forecast.json`  

@@ -199,6 +199,101 @@ def test_init_no_clobber(tmp_path, capsys):
     assert "windows" in json.loads(cfg_path.read_text())
 
 
+def test_doctor_project_provenance(tmp_path, monkeypatch, capsys):
+    """With a project .token-oracle.json in cwd, doctor shows (project)."""
+    monkeypatch.delenv("TOKEN_ORACLE_CONFIG", raising=False)
+    proj = tmp_path / "proj"
+    proj.mkdir()
+    cfg_file = proj / ".token-oracle.json"
+    cfg_file.write_text(
+        json.dumps(
+            {
+                "plan": "pro",
+                "source": "generic",
+                "source_opts": {"events_path": str(tmp_path / "no.json")},
+            }
+        )
+    )
+    monkeypatch.chdir(proj)
+    # generic empty source so doctor doesn't scan real logs forever
+    rc = main(["doctor", "--now", "100000"])
+    out = capsys.readouterr().out
+    assert "(project)" in out
+    assert ".token-oracle.json" in out
+    # pro 5h cap is 19000 — doctor windows row should reflect plan
+    assert rc in (0, 1)  # may be 1 if no events
+
+
+def test_init_wizard_project_pro(monkeypatch, tmp_path, capsys):
+    """Wizard with answers 1 / 2 / empty → pro plan + project file + cost auto."""
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("token_oracle.cli.main._init_is_tty", lambda: True)
+    # plan choices are sorted(PRESETS): max20, max5, pro, supergrok → pro is index of "pro"
+    from token_oracle.core.config import PRESETS
+
+    names = sorted(PRESETS.keys())
+    pro_idx = str(names.index("pro") + 1)
+    answers = iter([pro_idx, "2", ""])  # plan pro, project, cost default Y
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    rc = main(["init"])
+    assert rc == 0
+    path = tmp_path / ".token-oracle.json"
+    assert path.is_file()
+    data = json.loads(path.read_text())
+    assert data.get("plan") == "pro"
+    assert data.get("cost_mode") == "auto"
+    out = capsys.readouterr().out
+    assert "next:" in out
+
+
+def test_init_wizard_defaults_global(monkeypatch, tmp_path, capsys):
+    """Empty answers → max20 + global path under XDG_CONFIG_HOME."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("token_oracle.cli.main._init_is_tty", lambda: True)
+    answers = iter(["", "", ""])  # defaults
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    rc = main(["init"])
+    assert rc == 0
+    cfg = tmp_path / "xdg" / "token-oracle" / "config.json"
+    assert cfg.is_file()
+    data = json.loads(cfg.read_text())
+    assert data.get("plan") == "max20"
+    assert data.get("cost_mode") == "auto"
+
+
+def test_init_wizard_existing_file_no_clobber(monkeypatch, tmp_path, capsys):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+    target = tmp_path / "xdg" / "token-oracle" / "config.json"
+    target.parent.mkdir(parents=True)
+    target.write_text(json.dumps({"plan": "pro", "keep": True}))
+    monkeypatch.setattr("token_oracle.cli.main._init_is_tty", lambda: True)
+    answers = iter(["", "", ""])
+    monkeypatch.setattr("builtins.input", lambda _p="": next(answers))
+    rc = main(["init"])
+    assert rc == 1
+    assert json.loads(target.read_text())["keep"] is True
+    assert "already configured" in capsys.readouterr().out
+
+
+def test_init_non_tty_skips_wizard(monkeypatch, tmp_path, capsys):
+    """Without a TTY, bare `init` stays non-interactive (plan 008 path)."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "xdg"))
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr("token_oracle.cli.main._init_is_tty", lambda: False)
+    # if wizard ran it would call input() and fail — ensure it doesn't
+    monkeypatch.setattr(
+        "builtins.input",
+        lambda _p="": (_ for _ in ()).throw(AssertionError("wizard should not prompt")),
+    )
+    rc = main(["init"])
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "Which plan" not in out
+    assert (tmp_path / "xdg" / "token-oracle" / "config.json").is_file()
+
+
 def test_statusline_ingests_rate_limits(monkeypatch, tmp_path, capsys):
     """Statusline command ingests rate_limits from non-tty stdin into ratelimits snapshot.
     Hermetic: XDG_DATA_HOME + explicit path for assertion; monkeypatched stdin.

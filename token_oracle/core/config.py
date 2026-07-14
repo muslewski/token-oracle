@@ -287,6 +287,54 @@ def default_config_path():
     return os.path.join(_xdg("XDG_CONFIG_HOME", "~/.config"), "token-oracle", "config.json")
 
 
+PROJECT_CONFIG_NAME = ".token-oracle.json"
+
+
+def find_config_path(cwd=None):
+    """Resolution order (first hit wins):
+
+    1. ``$TOKEN_ORACLE_CONFIG`` (env)
+    2. ``.token-oracle.json`` in cwd or any ancestor (stop after the user's
+       home directory or filesystem root; hard cap 40 levels)
+    3. ``default_config_path()`` (global XDG — returned even if absent)
+    """
+    env = os.environ.get("TOKEN_ORACLE_CONFIG")
+    if env:
+        return os.path.expanduser(env)
+
+    start = os.path.abspath(cwd or os.getcwd())
+    home = os.path.abspath(os.path.expanduser("~"))
+    cur = start
+    for _ in range(40):
+        candidate = os.path.join(cur, PROJECT_CONFIG_NAME)
+        if os.path.isfile(candidate):
+            return candidate
+        # stop after checking home; do not walk above it
+        if os.path.normpath(cur) == os.path.normpath(home):
+            break
+        parent = os.path.dirname(cur)
+        if parent == cur:  # filesystem root
+            break
+        cur = parent
+    return default_config_path()
+
+
+def config_provenance(path=None, cwd=None) -> str:
+    """Which resolution rule produced the active config path.
+
+    Returns one of: ``--config``, ``env``, ``project``, ``global``.
+    When ``path`` is an explicit ``--config`` argument, always ``--config``.
+    """
+    if path is not None:
+        return "--config"
+    if os.environ.get("TOKEN_ORACLE_CONFIG"):
+        return "env"
+    resolved = find_config_path(cwd=cwd)
+    if os.path.basename(resolved) == PROJECT_CONFIG_NAME:
+        return "project"
+    return "global"
+
+
 def default_cache_path():
     return os.path.join(_xdg("XDG_DATA_HOME", "~/.local/share"), "token-oracle", "cache.json")
 
@@ -408,7 +456,8 @@ def _validate_external_caps(raw_five, raw_wk, preset_five, preset_wk):
 
 
 def load_config(path: str | None = None) -> "Config":
-    path = path or default_config_path()
+    # Explicit --config wins; else discovery (env / project / global XDG).
+    path = os.path.expanduser(path) if path is not None else find_config_path()
     issues: list[str] = []
     expanded_path = os.path.expanduser(path)
     data: dict[str, Any] | None = None
@@ -602,15 +651,29 @@ def load_config(path: str | None = None) -> "Config":
     )
 
 
-def write_default_config(path=None, preset="max20", force=False) -> str:
+def write_default_config(path=None, preset="max20", force=False, cost_mode=None) -> str:
+    """Write a starter config. When the file already exists and force is false,
+    return the path without modifying it (caller prints the clobber message).
+
+    Body is the chosen preset plus a ``plan`` key; optional ``cost_mode`` is
+    written when provided (wizard / explicit callers).
+    """
     path = os.path.expanduser(path or default_config_path())
     if os.path.exists(path) and not force:
         return path
+    if preset not in PRESETS:
+        preset = "max20"
     d = os.path.dirname(path)
     if d:
         os.makedirs(d, exist_ok=True)
+    raw_preset = PRESETS.get(preset) or PRESETS.get("max20") or {}
+    body: dict = dict(raw_preset) if isinstance(raw_preset, dict) else {}
+    body["plan"] = preset
+    if cost_mode is not None:
+        body["cost_mode"] = cost_mode
     with open(path, "w", encoding="utf-8") as fh:
-        json.dump(PRESETS[preset], fh, indent=2)
+        json.dump(body, fh, indent=2)
+        fh.write("\n")
     return path
 
 

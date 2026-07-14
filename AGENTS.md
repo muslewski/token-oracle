@@ -70,20 +70,28 @@ process exit code is `0` only when every row is `✓`.
 ## Step 4 — Configure windows (or accept the default)
 
 The default `max20` preset works for Claude Pro / max20 (and similar Grok) subscriptions with no
-config file needed. To customise, run `token-oracle init` to write a starter
-config at `~/.config/token-oracle/config.json` (non-clobbering — pass
-`--force` to overwrite an existing file), then edit it:
+config file needed. To customise:
+
+- **Agents / non-interactive** — always use flags (do not rely on the TTY wizard):
 
 ```bash
-token-oracle init
+token-oracle init --preset max20
+# or project-scoped:
+token-oracle init --preset pro --config ./.token-oracle.json
 ```
 
-This writes the `max20` preset (source `claude_code`), which looks like this — edit the file to
-adjust windows or source (see Grok example below):
+- **Humans on a TTY** — bare `token-oracle init` runs a short wizard (plan,
+  global vs project `.token-oracle.json`, cost display).
+
+Pass `--force` to overwrite an existing file. Resolution order (first wins):
+`--config` → `$TOKEN_ORACLE_CONFIG` → walk-up `.token-oracle.json` → XDG global.
+
+Non-interactive init writes a starter like:
 
 ```json
 {
   "source": "claude_code",
+  "plan": "max20",
   "windows": [
     {"name": "5h",     "cap": 220000,  "period_secs": 18000},
     {"name": "weekly", "cap": 8000000, "period_secs": 604800}
@@ -91,11 +99,12 @@ adjust windows or source (see Grok example below):
 }
 ```
 
-Re-run `oracle doctor` to confirm the config file is now loaded:
+Re-run `oracle doctor` to confirm the config file is now loaded (note the
+provenance suffix):
 
 ```
 🔮 oracle doctor
-  ✓ config   — /home/<user>/.config/token-oracle/config.json
+  ✓ config   — /home/<user>/.config/token-oracle/config.json (global)
   ✓ source   — claude_code (available: claude_code, generic, grok)
   ✓ data     — 182 files, 32263 events, last 6s ago
   ✓ cache    — /home/<user>/.local/share/token-oracle/cache.json (updated 13m ago)

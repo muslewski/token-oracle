@@ -16,8 +16,11 @@ from ..core import events as events_mod
 from ..core import report as report_mod
 from ..core.config import (
     PRESETS,
+    PROJECT_CONFIG_NAME,
     _window_from_dict,
+    config_provenance,
     default_config_path,
+    find_config_path,
     load_config,
     write_default_config,
 )
@@ -81,6 +84,112 @@ def _is_interactive():
         return sys.stdout.isatty()
     except Exception:
         return False
+
+
+def _init_is_tty():
+    """True when both stdin and stdout are TTYs (wizard gate). Monkeypatchable."""
+    try:
+        return bool(sys.stdin.isatty()) and bool(sys.stdout.isatty())
+    except Exception:
+        return False
+
+
+def _prompt_choice(prompt: str, default: str) -> str:
+    """Read a line; empty/whitespace → default. Raises EOFError/KeyboardInterrupt."""
+    raw = input(prompt)
+    s = (raw or "").strip()
+    return s if s else default
+
+
+def _init_wizard(args) -> int:
+    """Interactive first-run setup (plan 021). Numbered choices via input().
+
+    Abort (EOF/KeyboardInterrupt) prints `aborted` and returns 1 without writing.
+    """
+    color = colors.color_enabled()
+    print(colors.violet(f"{colors.M_ORACLE} token-oracle setup", color))
+    print()
+
+    # 1) plan preset — built from PRESETS (never hardcode names beyond display)
+    names = sorted(PRESETS.keys())
+    # Prefer max20 as default when present
+    default_plan = "max20" if "max20" in PRESETS else names[0]
+    print("1) Which plan are you on?")
+    for i, name in enumerate(names, 1):
+        raw = PRESETS.get(name)
+        pdef: dict = raw if isinstance(raw, dict) else {}
+        wins_raw = pdef.get("windows")
+        wins: list = wins_raw if isinstance(wins_raw, list) else []
+        five = next(
+            (w for w in wins if isinstance(w, dict) and w.get("name") == "5h"),
+            None,
+        )
+        cap = five.get("cap") if isinstance(five, dict) else None
+        cap_s = f"5h cap ≈ {cap // 1000}k tokens" if isinstance(cap, int) else "custom windows"
+        mark = "   [default]" if name == default_plan else ""
+        print(f"   {i}. {name:<10} ({cap_s}){mark}")
+    default_idx = str(names.index(default_plan) + 1)
+    try:
+        ans = _prompt_choice(f"   choice [{default_idx}]: ", default_idx)
+    except (EOFError, KeyboardInterrupt):
+        print("\naborted")
+        return 1
+    try:
+        idx = int(ans)
+        if not (1 <= idx <= len(names)):
+            raise ValueError
+        plan = names[idx - 1]
+    except ValueError:
+        # allow typing the preset name directly
+        if ans in PRESETS:
+            plan = ans
+        else:
+            plan = default_plan
+
+    # 2) scope: global vs project
+    print()
+    print("2) Where should config live?")
+    print(f"   1. global — {default_config_path()} (all repos)  [default]")
+    print(f"   2. this project — ./{PROJECT_CONFIG_NAME} (wins over global here)")
+    try:
+        scope = _prompt_choice("   choice [1]: ", "1")
+    except (EOFError, KeyboardInterrupt):
+        print("\naborted")
+        return 1
+    if scope.strip() in ("2", "project", "p"):
+        target = os.path.join(os.getcwd(), PROJECT_CONFIG_NAME)
+    else:
+        target = default_config_path()
+
+    # 3) cost estimates
+    print()
+    print("3) Show cost estimates in USD? [Y/n]")
+    try:
+        cost_ans = _prompt_choice("   ", "Y")
+    except (EOFError, KeyboardInterrupt):
+        print("\naborted")
+        return 1
+    cost_mode = "off" if cost_ans.lower() in ("n", "no", "0", "off") else "auto"
+
+    # Plan 022 sage line: only if detection already exists and finds something.
+    # Detection lives in _sage_row; print a dim hint when sage config is present.
+    try:
+        label, detail, _ok = _sage_row(time.time())[:3]
+        if label == "sage" and "not detected" not in detail:
+            print()
+            print(colors.dim(f"  note: {detail}", color))
+    except Exception:
+        pass
+
+    if os.path.exists(os.path.expanduser(target)):
+        print(f"{target} already configured — pass --force to overwrite")
+        return 1
+
+    path = write_default_config(target, preset=plan, force=False, cost_mode=cost_mode)
+    print()
+    print(path)
+    print("next: token-oracle doctor · token-oracle dash")
+    return 0
 
 
 def _first_run_hint():
@@ -427,13 +536,27 @@ def _sage_row(now, home=None):
 def _doctor_lines(cfg, config_path, color, now):
     avail = available()
 
-    path = config_path or default_config_path()
-    if not os.path.exists(os.path.expanduser(path)):
-        config_row = ("config", f"{path} (missing — using built-in max20 preset)", True)
-    elif cfg.issues:
-        config_row = ("config", f"{path} ({len(cfg.issues)} issue(s) — see below)", False)
+    # Provenance: which rule won (--config / env / project / global)
+    rule = config_provenance(config_path)
+    if config_path is not None:
+        path = os.path.expanduser(config_path)
     else:
-        config_row = ("config", path, True)
+        path = find_config_path()
+    prov = f"({rule})"
+    if not os.path.exists(os.path.expanduser(path)):
+        config_row = (
+            "config",
+            f"{path} {prov} (missing — using built-in max20 preset)",
+            True,
+        )
+    elif cfg.issues:
+        config_row = (
+            "config",
+            f"{path} {prov} ({len(cfg.issues)} issue(s) — see below)",
+            False,
+        )
+    else:
+        config_row = ("config", f"{path} {prov}", True)
 
     # multi-aware data probe
     multi = bool(cfg.profiles)
@@ -772,9 +895,9 @@ def main(argv=None):
         if name == "init":
             sp.add_argument(
                 "--preset",
-                default="max20",
+                default=None,
                 choices=sorted(PRESETS),
-                help="plan preset for the new config (default: max20)",
+                help="plan preset for the new config (default: max20; omit for wizard)",
             )
             sp.add_argument(
                 "--force",
@@ -814,9 +937,16 @@ def main(argv=None):
     now = _now(args)
 
     if args.cmd == "init":
+        # Wizard when no --preset/--config/--force and both stdin+stdout are TTYs.
+        use_wizard = (
+            args.preset is None and args.config is None and not args.force and _init_is_tty()
+        )
+        if use_wizard:
+            return _init_wizard(args)
+        preset = args.preset or "max20"
         target = os.path.expanduser(args.config or default_config_path())
         existed = os.path.exists(target)
-        path = write_default_config(target, preset=args.preset, force=args.force)
+        path = write_default_config(target, preset=preset, force=args.force)
         if existed and not args.force:
             print(f"{path} exists — pass --force to overwrite")
         else:
