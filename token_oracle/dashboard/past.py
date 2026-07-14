@@ -118,6 +118,12 @@ def render_past(
     show_top = width >= 100
     header = title or f"Past — last {days} days"
     out: list[str] = [c.dim(header, enabled)]
+    # Column legend so "$" reads as estimated API spend, not an abstract number.
+    if show_cost and width >= 48:
+        legend = "  day      tokens   spent$   %weekly-cap"
+        if show_top and width >= 100:
+            legend += "   top model"
+        out.append(c.dim(legend, enabled))
 
     if not day_rows:
         out.append("")
@@ -158,9 +164,17 @@ def render_past(
         if total.pct_cap is not None and width >= 60:
             tparts.append(f"{total.pct_cap:.0f}%")
         out.append("  ".join(tparts))
+        if show_cost and total.cost is not None:
+            out.append(
+                c.dim(
+                    f"  est. API spend {_fmt_usd(total.cost)} over {days} days "
+                    f"(from model prices — not your subscription fee)",
+                    enabled,
+                )
+            )
         unp = int(total.unpriced_tokens or 0)
         if unp > 0 and show_cost:
-            out.append(c.dim(f"  (+{_fmt_tok(unp)} tokens unpriced)", enabled))
+            out.append(c.dim(f"  (+{_fmt_tok(unp)} tokens unpriced — no $ for those)", enabled))
     return out
 
 

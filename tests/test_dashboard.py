@@ -27,6 +27,8 @@ from token_oracle.dashboard.future import (
     spark_next24,
 )
 from token_oracle.dashboard.past import render_past, short_model, top_models_by_day
+from token_oracle.dashboard.skeleton import render_skeleton, render_stale_banner, spinner_char
+from token_oracle.dashboard.store import DashStore
 from token_oracle.live.contract import STATE_OK
 from token_oracle.live.overlay import LiveCell
 
@@ -671,3 +673,45 @@ def test_render_future_cost_line():
     assert "spend pace" in with_c
     assert "spend pace" not in without
     assert cost_pace_line(7.0, days=7).startswith("spend pace:")
+
+
+# --- smooth dash: skeletons + store -----------------------------------------
+
+
+def test_skeleton_has_no_ansi_when_color_off():
+    body = "\n".join(render_skeleton("past", 80, False, spin="⠋"))
+    assert "loading" in body.lower()
+    assert "░" in body  # placeholder bars
+    assert "\033" not in body
+    assert "\033" not in render_stale_banner(False)
+
+
+def test_skeleton_mentions_tab():
+    assert "Past" in "\n".join(render_skeleton("past", 60, False))
+    assert "Future" in "\n".join(render_skeleton("future", 60, False))
+
+
+def test_spinner_cycles():
+    assert spinner_char(0) != spinner_char(1) or len(set(spinner_char(i) for i in range(20))) > 1
+
+
+def test_dash_store_stale_while_revalidate():
+    s = DashStore()
+    snap0 = s.snapshot()
+    assert snap0.loading_present is True
+    assert snap0.has_present is False
+    s.publish_present([object()], {}, {})
+    snap1 = s.snapshot()
+    assert snap1.has_present is True
+    assert snap1.loading_present is False
+    s.set_loading("present", True)
+    snap2 = s.snapshot()
+    assert snap2.loading_present is True
+    assert snap2.has_present is True  # stale data still available
+
+
+def test_render_past_explains_spend():
+    rows = _ledger_rows()
+    text = "\n".join(render_past(rows, 120, False, show_cost=True))
+    assert "spent" in text.lower() or "spend" in text.lower()
+    assert "subscription" in text.lower() or "API" in text

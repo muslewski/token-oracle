@@ -31,6 +31,8 @@ from .keys import CYCLE, LEFT, QUIT, RIGHT, TAB1, TAB2, TAB3
 from .keys import reader as key_reader
 from .past import render_past_sections, top_models_by_day
 from .scene import Painter, Region, Scene
+from .skeleton import render_skeleton, render_stale_banner, spinner_char
+from .store import DashStore
 
 BAR_W = 22  # default/maximum gauge width
 BAR_W_MIN = 6  # narrowest legible gauge
@@ -1006,35 +1008,47 @@ def _inject_tab_bar(lines: list[str], active: str, width: int, enabled: bool) ->
     return out
 
 
+def _paint_tab_frame(active_tab, body, w, enabled, footer_extra=None):
+    """Tab chrome around a body panel (past/future/skeleton)."""
+    lines = [
+        render_tab_bar(active_tab, w, enabled),
+        c.dim("─" * min(w, 60), enabled),
+    ]
+    if footer_extra:
+        lines.append(footer_extra)
+    lines.extend(body)
+    lines.append("")
+    lines.append(render_footer(w, enabled))
+    return lines
+
+
 def run(cfg):
-    """Live refreshing dashboard: tab shell (018) + fixed-height scene (034).
+    """Live dashboard: instant tab shell + background data worker.
 
-    Tabs: past | present | future (start on present). Arrow/h/l/1-3/tab switch;
-    q or ctrl-c quit. Present hosts the multi-profile panels; past/future show
-    placeholders until plans 019/020. The 033 probe worker still runs for present.
+    Architecture (web conventions, terminal edition):
+      * UI thread — only keys + paint. Never runs forecast / ledger / cache I/O.
+      * Data worker — forecast, past ledger, future extras; publishes to DashStore.
+      * Stale-while-revalidate — last good frame stays visible while refresh runs.
+      * Skeletons — first visit to a tab shows placeholders until data arrives.
 
-    Non-tty (piped): no keys, no alt-screen enter, present-only ~2 s refresh —
-    keeps `oracle dash | head` and CI safe.
+    Why: on a large history, forecast alone can take ~10s; blocking the UI thread
+    made ←/→ lag. Detaching I/O restores fluent tab switching regardless of
+    network or log size. Live probe stays in its own daemon (plan 033).
+
+    Non-tty (piped): present-only, no keys/alt-screen, ~2s sync refresh.
     """
-    last_fs = None
     active_tab = "present"
-    kr = key_reader()  # None when stdin is not a tty
+    kr = key_reader()
     interactive = kr is not None and bool(getattr(sys.stdout, "isatty", lambda: False)())
+    store = DashStore()
+    stop = threading.Event()
 
-    # Past/Future data box (refreshed at most every TAB_DATA_TTL seconds).
-    tab_data = {
-        "fetched_at": 0.0,
-        "past_sections": None,
-        "profile": None,
-        "cost_line": None,
-    }
-
-    # Ring buffer for probe stderr (routed to activity region).
+    # Probe stderr ring (activity region on present) — independent of forecast.
     last_probe_result = {"st": None, "stderr_tail": deque(maxlen=3)}
 
     def _probe_worker():
         try:
-            while True:
+            while not stop.is_set():
                 blessed = os.path.expanduser("~/.local/share/token-oracle/venv/bin/oracle")
                 if os.path.isfile(blessed) and os.access(blessed, os.X_OK):
                     cmd = [blessed, "live-probe", "--json"]
@@ -1055,206 +1069,239 @@ def run(cfg):
                     last_probe_result["stderr_tail"] = deque(tail, maxlen=3)
                 except Exception:
                     pass
-                time.sleep(LIVE_PROBE_INTERVAL)
+                stop.wait(LIVE_PROBE_INTERVAL)
         except Exception:
             pass
 
-    worker = threading.Thread(target=_probe_worker, daemon=True, name="live-probe-worker")
-    worker.start()
+    def _data_worker():
+        """Heavy path off the UI thread. Publishes whenever a piece finishes."""
+        past_every = TAB_DATA_TTL
+        last_past_t = 0.0
+        # First cycle: present first so the home tab fills ASAP, then past/future.
+        while not stop.is_set():
+            cycle_start = time.time()
+            now = cycle_start
+            # --- present (forecast) ---
+            store.set_loading("present", True)
+            try:
+                prev = store.take_prev_forecasts()
+                fs = run_forecast(now, cfg)
+                snap = load_snapshot() or {}
+                cells = overlay_cells(fs, snap, now)
+                resets = detect_resets(prev, fs) if prev is not None else []
+                store.set_prev_forecasts(fs)
+                rmsg, runtil = "", 0.0
+                if resets:
+                    names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
+                    rmsg = f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
+                    runtil = now + 6.0
+                store.publish_present(fs, cells, snap, reset_msg=rmsg, reset_until=runtil)
+            except Exception as e:
+                store.publish_error(f"forecast failed: {e}")
+                store.set_loading("present", False)
 
-    # Animation state (present tab):
+            # --- past + future (cheaper than cold forecast but still multi-second) ---
+            if (now - last_past_t) >= past_every or not store.snapshot().has_past:
+                store.set_loading("past", True)
+                store.set_loading("future", True)
+                try:
+                    sections = _past_sections_for_dash(cfg, now, days=PAST_DAYS)
+                    store.publish_past(sections)
+                except Exception:
+                    store.publish_past([])
+                try:
+                    prof, cline = _future_extras(cfg, now)
+                    store.publish_future(prof, cline)
+                except Exception:
+                    store.publish_future(None, None)
+                last_past_t = now
+            else:
+                # keep flags honest when we skip a heavy past rebuild
+                store.set_loading("past", False)
+                store.set_loading("future", False)
+
+            # Pace: don't spin-burn CPU; still refresh often enough for live feel.
+            # If forecast took 12s, we don't sleep extra; if it was fast, wait ~1s.
+            elapsed = time.time() - cycle_start
+            stop.wait(max(0.2, 1.0 - elapsed))
+
+    if interactive:
+        threading.Thread(target=_probe_worker, daemon=True, name="live-probe-worker").start()
+        threading.Thread(target=_data_worker, daemon=True, name="dash-data-worker").start()
+
+    # Present-tab animation state lives only on the UI thread.
     disp: dict = {}
     prev_target: dict = {}
     pulse_start: dict = {}
-    curr = None
-    cells: dict = {}
-    snap: dict = {}
-    last_data_t = 0.0
-    reset_msg = ""
-    reset_until = 0.0
     spin_i = 0
 
-    # key reader + painter both use context managers; finally restores termios
-    # (keys) and alt screen (Painter / screen.LEAVE).
     key_cm = kr if kr is not None else _NullCM()
     try:
         with key_cm, Painter() as painter:
-            # First frame: tab bar + spinner before the (possibly slow) first forecast.
-            size = shutil.get_terminal_size((80, 24))
-            w = max(1, int(size.columns))
-            enabled = c.color_enabled()
-            if interactive:
-                spin = _SPINNER[spin_i % len(_SPINNER)]
-                spin_i += 1
-                painter.paint(
-                    [
-                        render_tab_bar(active_tab, w, enabled),
-                        "",
-                        c.dim(f"  {spin} consulting the oracle…", enabled),
-                        "",
-                        render_footer(w, enabled),
-                    ]
-                )
-
             try:
                 while True:
                     now = time.time()
                     size = shutil.get_terminal_size((80, 24))
                     w = max(1, int(size.columns))
                     enabled = c.color_enabled()
+                    spin = spinner_char(spin_i)
+                    spin_i += 1
 
-                    # Poll keys every tick when interactive (instant response).
+                    # ---- keys: always first, never blocked by data ----
                     if kr is not None:
-                        for key in kr.poll(0.0 if not interactive else 0.0):
+                        for key in kr.poll(0.0):
                             nxt = _apply_tab_key(active_tab, key)
                             if nxt is None:
+                                stop.set()
                                 return 0
                             active_tab = nxt
 
-                    # Data refresh cadence: ~1 s (engine still gates aggregate at 30 s).
-                    # Non-interactive falls back to ~2 s present-only loop.
-                    data_dt = 1.0 if interactive else 2.0
-                    if curr is None or (now - last_data_t) >= data_dt:
-                        curr = run_forecast(now, cfg)
+                    if not interactive:
+                        # Piped path: original sync present-only loop.
+                        fs = run_forecast(now, cfg)
                         snap = load_snapshot() or {}
-                        cells = overlay_cells(curr, snap, now)
-                        resets = detect_resets(last_fs, curr) if last_fs is not None else []
-                        last_fs = curr
-                        last_data_t = now
-                        if resets:
-                            names = ", ".join(
-                                sorted({f"{r['profile']}:{r['window']}" for r in resets})
-                            )
-                            reset_msg = (
-                                f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
-                            )
-                            reset_until = now + 6.0
-
-                    animating = False
-                    if active_tab == "present":
-                        probe_log = list(last_probe_result.get("stderr_tail") or [])
-                        targets = _active_row_targets(curr, cells)
-                        for k, tgt in targets.items():
-                            if k not in disp:
-                                disp[k] = tgt
-                                prev_target[k] = tgt
-                                continue
-                            if abs(tgt - prev_target.get(k, tgt)) >= CHANGE_EPS:
-                                pulse_start[k] = now
-                            prev_target[k] = tgt
-                            d = disp[k]
-                            if abs(tgt - d) < SETTLE_EPS:
-                                disp[k] = tgt
-                            else:
-                                disp[k] = d + (tgt - d) * EASE
-                                animating = True
-                        for k in list(disp.keys()):
-                            if k not in targets:
-                                disp.pop(k, None)
-                                prev_target.pop(k, None)
-                                pulse_start.pop(k, None)
-                        pulse: dict = {}
-                        for k, st in list(pulse_start.items()):
-                            lv = _pulse_level(st, now)
-                            if lv > 0:
-                                pulse[k] = lv
-                                animating = True
-                            else:
-                                pulse_start.pop(k, None)
-
+                        cells = overlay_cells(fs, snap, now)
                         base = render_frame(
-                            curr,
-                            now,
-                            color=None,
-                            cells=cells,
-                            probe_log=probe_log,
-                            snapshot=snap,
-                            size=size,
-                            anim_pct=disp,
-                            pulse=pulse,
+                            fs, now, color=None, cells=cells, snapshot=snap, size=size
                         )
-                        if interactive:
-                            base = _inject_tab_bar(base, active_tab, w, enabled)
-                        if reset_msg and now < reset_until and len(base) > HEADER_H:
-                            base[HEADER_H] = c.pulse(c.violet(reset_msg, enabled), enabled)
-                            animating = True
                         painter.paint(base)
-                    else:
-                        # Past / Future real panels (019 / 020). Refresh data ≤ every 30s.
-                        if (now - tab_data["fetched_at"]) >= TAB_DATA_TTL or tab_data[
-                            "past_sections"
-                        ] is None:
-                            try:
-                                tab_data["past_sections"] = _past_sections_for_dash(
-                                    cfg, now, days=PAST_DAYS
-                                )
-                            except Exception:
-                                tab_data["past_sections"] = []
-                            try:
-                                prof, cline = _future_extras(cfg, now)
-                                tab_data["profile"] = prof
-                                tab_data["cost_line"] = cline
-                            except Exception:
-                                tab_data["profile"] = None
-                                tab_data["cost_line"] = None
-                            tab_data["fetched_at"] = now
+                        time.sleep(2.0)
+                        continue
 
-                        show_cost = (getattr(cfg, "cost_mode", "auto") or "auto") != "off"
-                        if active_tab == "past":
+                    st = store.snapshot()
+                    show_cost = (getattr(cfg, "cost_mode", "auto") or "auto") != "off"
+                    animating = False
+
+                    if active_tab == "present":
+                        if not st.has_present:
+                            body = render_skeleton(
+                                "present",
+                                w,
+                                enabled,
+                                spin=spin,
+                                hint="reading local logs (can take a few seconds on large history)",
+                            )
+                            painter.paint(_paint_tab_frame(active_tab, body, w, enabled))
+                        else:
+                            curr = st.forecasts
+                            cells = st.cells
+                            snap = st.snap
+                            probe_log = list(last_probe_result.get("stderr_tail") or [])
+                            targets = _active_row_targets(curr, cells)
+                            for k, tgt in targets.items():
+                                if k not in disp:
+                                    disp[k] = tgt
+                                    prev_target[k] = tgt
+                                    continue
+                                if abs(tgt - prev_target.get(k, tgt)) >= CHANGE_EPS:
+                                    pulse_start[k] = now
+                                prev_target[k] = tgt
+                                d = disp[k]
+                                if abs(tgt - d) < SETTLE_EPS:
+                                    disp[k] = tgt
+                                else:
+                                    disp[k] = d + (tgt - d) * EASE
+                                    animating = True
+                            for k in list(disp.keys()):
+                                if k not in targets:
+                                    disp.pop(k, None)
+                                    prev_target.pop(k, None)
+                                    pulse_start.pop(k, None)
+                            pulse: dict = {}
+                            for k, pst in list(pulse_start.items()):
+                                lv = _pulse_level(pst, now)
+                                if lv > 0:
+                                    pulse[k] = lv
+                                    animating = True
+                                else:
+                                    pulse_start.pop(k, None)
+
+                            base = render_frame(
+                                curr,
+                                now,
+                                color=None,
+                                cells=cells,
+                                probe_log=probe_log,
+                                snapshot=snap,
+                                size=size,
+                                anim_pct=disp,
+                                pulse=pulse,
+                            )
+                            base = _inject_tab_bar(base, active_tab, w, enabled)
+                            if st.reset_msg and now < st.reset_until and len(base) > HEADER_H:
+                                base[HEADER_H] = c.pulse(c.violet(st.reset_msg, enabled), enabled)
+                                animating = True
+                            if st.loading_present and len(base) > 1:
+                                # stale-while-revalidate chip under tab bar
+                                base.insert(1, render_stale_banner(enabled, spin))
+                            painter.paint(base)
+                    elif active_tab == "past":
+                        if not st.has_past:
+                            body = render_skeleton(
+                                "past",
+                                w,
+                                enabled,
+                                spin=spin,
+                                hint="building the daily ledger from cached events…",
+                            )
+                        else:
                             body = render_past_sections(
-                                tab_data["past_sections"] or [],
+                                st.past_sections or [],
                                 w,
                                 enabled,
                                 days=PAST_DAYS,
                                 show_cost=show_cost,
                             )
+                            if st.loading_past:
+                                body = [render_stale_banner(enabled, spin)] + body
+                        painter.paint(_paint_tab_frame(active_tab, body, w, enabled))
+                    else:  # future
+                        if not st.has_future and not st.has_present:
+                            body = render_skeleton(
+                                "future",
+                                w,
+                                enabled,
+                                spin=spin,
+                                hint="waiting on forecast + burn profile…",
+                            )
                         else:
-                            # Ensure forecasts exist even if data_dt hasn't fired yet
-                            if curr is None:
-                                curr = run_forecast(now, cfg)
                             body = render_future(
-                                curr,
-                                tab_data.get("profile"),
+                                st.forecasts if st.has_present else [],
+                                st.profile,
                                 now,
                                 w,
                                 enabled,
-                                cost_line=tab_data.get("cost_line"),
+                                cost_line=st.cost_line,
                             )
-                        frame = [
-                            render_tab_bar(active_tab, w, enabled),
-                            c.dim("─" * min(w, 60), enabled),
-                            *body,
-                            "",
-                            render_footer(w, enabled),
-                        ]
-                        painter.paint(frame)
+                            if st.loading_future or st.loading_present:
+                                body = [render_stale_banner(enabled, spin)] + body
+                        painter.paint(_paint_tab_frame(active_tab, body, w, enabled))
 
-                    # Sleep: poll-friendly when interactive; keys also polled after sleep.
-                    if interactive:
-                        sleep_s = FAST_DT if animating else 0.25
-                        # Drain keys during the wait slice for snappy switching.
-                        end = time.time() + sleep_s
-                        while True:
-                            remaining = end - time.time()
-                            if remaining <= 0:
-                                break
-                            for key in kr.poll(min(0.25, remaining)):
-                                nxt = _apply_tab_key(active_tab, key)
-                                if nxt is None:
-                                    return 0
-                                if nxt != active_tab:
-                                    active_tab = nxt
-                                    break  # re-render immediately
-                            else:
-                                continue
+                    # Short UI tick — keys polled again next loop. Keep ~15–20 fps
+                    # when animating; ~10 fps idle is plenty for a live clock.
+                    sleep_s = FAST_DT if animating else 0.1
+                    end = time.time() + sleep_s
+                    while time.time() < end:
+                        remaining = end - time.time()
+                        if remaining <= 0:
                             break
-                    else:
-                        time.sleep(2.0)
+                        switched = False
+                        for key in kr.poll(min(0.05, remaining)):
+                            nxt = _apply_tab_key(active_tab, key)
+                            if nxt is None:
+                                stop.set()
+                                return 0
+                            if nxt != active_tab:
+                                active_tab = nxt
+                                switched = True
+                                break
+                        if switched:
+                            break
             except KeyboardInterrupt:
+                stop.set()
                 return 0
     finally:
-        # belt-and-suspenders: ensure leave sequences if painter was skipped
-        pass
+        stop.set()
     return 0
 
 
