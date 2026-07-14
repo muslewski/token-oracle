@@ -446,7 +446,7 @@ def test_subcommand_help_has_description(capsys):
         main(["dash", "--help"])
     assert ei.value.code == 0
     out = capsys.readouterr().out
-    assert "full-screen live dashboard" in out
+    assert "Past/Present/Future" in out or "full-screen" in out
 
 
 def test_now_flag_is_hidden(capsys):

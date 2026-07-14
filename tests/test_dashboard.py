@@ -6,13 +6,18 @@ from token_oracle.core.contracts import Forecast
 from token_oracle.core.engine import detect_resets
 from token_oracle.dashboard.app import (
     BAR_W,
+    TABS,
     _active_row_targets,
+    _apply_tab_key,
     _bar,
     _compact_profile_line,
     _pulse_level,
     panel_height,
+    render_footer,
     render_frame,
     render_frame_str,
+    render_placeholder,
+    render_tab_bar,
 )
 from token_oracle.live.contract import STATE_OK
 from token_oracle.live.overlay import LiveCell
@@ -464,3 +469,50 @@ def test_tiny_chip_shows_binding_not_only_5h():
     frame = render_frame(fs, now=100000.0, color=False, cells=cells, size=os.terminal_size((80, 2)))
     plain = "\n".join(frame)
     assert "99%" in plain or "99" in plain
+
+
+# --- plan 018 tab shell (pure renderers) ------------------------------------
+
+
+def test_render_tab_bar_marks_active():
+    bar = render_tab_bar("present", 80, False)
+    assert "Present" in bar and "Past" in bar and "Future" in bar
+    assert "token-oracle" in bar
+    assert "\033" not in bar  # color off
+
+
+def test_render_tab_bar_width_60_vs_120():
+    a = render_tab_bar("future", 60, False)
+    b = render_tab_bar("future", 120, False)
+    # wider bar can fit the clock; both mention Future
+    assert "Future" in a and "Future" in b
+    assert display_width(a) <= 60
+    assert display_width(b) <= 120
+
+
+def test_render_placeholder_mentions_tab():
+    past = "\n".join(render_placeholder("past", 80, False))
+    fut = "\n".join(render_placeholder("future", 80, False))
+    assert "past" in past.lower()
+    assert "future" in fut.lower()
+    assert "019" in past
+    assert "020" in fut
+    assert "\033" not in past
+
+
+def test_render_footer_lists_q():
+    foot = render_footer(80, False)
+    assert "q" in foot
+    assert "\033" not in foot
+
+
+def test_apply_tab_key_navigation():
+    assert _apply_tab_key("present", "left") == "past"
+    assert _apply_tab_key("present", "right") == "future"
+    assert _apply_tab_key("future", "right") == "past"  # wrap
+    assert _apply_tab_key("past", "tab2") == "present"
+    assert _apply_tab_key("past", "tab3") == "future"
+    assert _apply_tab_key("present", "cycle") == "future"
+    assert _apply_tab_key("present", "quit") is None
+    assert _apply_tab_key("present", "other") == "present"
+    assert set(TABS) == {"past", "present", "future"}

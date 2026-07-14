@@ -66,7 +66,7 @@ pip install token-oracle       # pip
 
 ```bash
 token-oracle forecast     # live forecast — time left before your cap
-token-oracle dash         # full-screen TUI dashboard
+token-oracle dash         # full-screen TUI — Past / Present / Future tabs
 token-oracle doctor       # check configuration + data sources
 ```
 
@@ -98,7 +98,7 @@ All subcommands accept `--config FILE` (default: `~/.config/token-oracle/config.
 | `statusline` | — | Emit plain-text/ANSI statusline fragment |
 | `tmux` | — | Emit tmux `status-right` fragment |
 | `doctor` | — | Check configuration and data sources |
-| `dash` | — | Launch full-screen TUI dashboard |
+| `dash` | — | Full-screen TUI (Past / Present / Future; ←/→ or h/l, 1–3, q) |
 | `clean` | `--yes` | Remove config, cache, and snapshot files |
 
 Grok Build users: `{"source": "grok"}` (or with `source_opts.sessions_dir`) in config; then `oracle tmux` / `statusline` / `forecast` surface usage. Hooks in `~/.grok/hooks/` can drive `oracle snapshot`.

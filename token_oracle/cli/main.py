@@ -35,7 +35,7 @@ _CMD_HELP = {
     "statusline": "print a one-line status for shell prompts / status bars",
     "tmux": "print a tmux-formatted status string",
     "doctor": "check config, data sources, cache, and live status",
-    "dash": "full-screen live dashboard (Ctrl-C to quit)",
+    "dash": "full-screen TUI — Past/Present/Future tabs (q quit)",
     "init": "write a starter config file",
     "clean": "remove token-oracle's config, cache, and snapshot files",
     "live": "turn real (browser-verified) live data on / off (or show status)",

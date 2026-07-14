@@ -22,8 +22,14 @@ you `forecast`, `snapshot`, `doctor`, `statusline`, and `tmux` subcommands.
 The TUI dashboard ships in the same package; no extra install step needed.
 
 ```bash
-oracle dash                      # live TUI, refreshes ~2 s
+oracle dash                      # live TUI — Past / Present / Future tabs
 ```
+
+Interactive terminal: arrow keys (or `h`/`l`) switch tabs, `1`–`3` jump,
+`Tab` cycles, `q` quits. Present is the live multi-profile forecast view;
+Past and Future are placeholders until the report/forecast-detail work
+lands. Piped / non-TTY output falls back to a non-interactive Present
+refresh (~2 s) so `oracle dash | head` stays usable.
 
 ### Tier 3 — + statusline / tmux integration
 

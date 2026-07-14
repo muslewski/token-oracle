@@ -26,6 +26,8 @@ from ..live.contract import (
 )
 from ..live.overlay import overlay_cells, rate_info
 from ..live.store import load_snapshot
+from .keys import CYCLE, LEFT, QUIT, RIGHT, TAB1, TAB2, TAB3
+from .keys import reader as key_reader
 from .scene import Painter, Region, Scene
 
 BAR_W = 22  # default/maximum gauge width
@@ -34,9 +36,103 @@ MIN_BOX = 34  # min box width that still fits "glyph name pct bar reset"
 BOX_MAX = 66  # widest stacked box (unchanged from today)
 BARS_MIN = 16  # min width for borderless slider bars (below this -> compact text)
 
+# Tab shell (plan 018). Present hosts the fixed-region scene (plan 034);
+# past/future ship as placeholders until plans 019/020 fill them.
+TABS = ("past", "present", "future")
+TAB_LABELS = {"past": "Past", "present": "Present", "future": "Future"}
+_SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
 
 def _clamp(v, lo, hi):
     return max(lo, min(hi, v))
+
+
+def render_tab_bar(active: str, width: int, enabled: bool) -> str:
+    """Pure tab bar: `🔮 token-oracle   ‹ Past │ Present │ Future ›` + clock.
+
+    Active tab name is violet; others dim. Right-aligned HH:MM:SS. Truncated
+    to `width` display cells when needed.
+    """
+    from ..cli.colors import display_width
+
+    active = active if active in TABS else "present"
+    parts = []
+    for name in TABS:
+        label = TAB_LABELS[name]
+        if name == active:
+            parts.append(c.violet(label, enabled) if enabled else label)
+        else:
+            parts.append(c.dim(label, enabled) if enabled else label)
+    # join with dim separators (use plain "│" so width math is stable)
+    mid = " │ ".join(parts)
+    left = f"{c.M_ORACLE} token-oracle   ‹ {mid} ›"
+    clock = time.strftime("%H:%M:%S")
+    clock_s = c.dim(clock, enabled) if enabled else clock
+    # pad between left and clock
+    gap = width - display_width(left) - display_width(clock_s)
+    if gap < 1:
+        # too narrow: drop the clock, then truncate left
+        line = left
+        if display_width(line) > width:
+            # fall back to a short title + active only
+            short = f"{c.M_ORACLE} {TAB_LABELS[active]}"
+            if display_width(short) > width:
+                return c.violet(f"{c.M_ORACLE}", enabled)[:width] if enabled else c.M_ORACLE
+            return c.violet(short, enabled) if (enabled and active) else short
+        return line
+    return left + (" " * gap) + clock_s
+
+
+def render_placeholder(tab: str, width: int, enabled: bool) -> list[str]:
+    """Pure past/future placeholder panel (plans 019/020 replace these)."""
+    tab = (tab or "past").lower()
+    if tab == "future":
+        msg = "the oracle is still learning to read the future"
+        note = "arrives with plan 020"
+    else:
+        msg = "the oracle is still learning to read the past"
+        note = "arrives with plan 019"
+    lines = [
+        "",
+        c.dim(f"  {msg}", enabled),
+        c.dim(f"  {note}", enabled),
+        "",
+        c.dim(f"  tab: {tab}", enabled),
+    ]
+    # pad to a modest panel height so Painter doesn't flash empty
+    while len(lines) < 8:
+        lines.append("")
+    return lines
+
+
+def render_footer(width: int, enabled: bool) -> str:
+    """Key-hint footer for the tabbed TUI."""
+    hints = "←/→ or h/l switch · 1-3 jump · q quit"
+    ts = time.strftime("%H:%M:%S")
+    text = f"{hints}  ·  {ts}"
+    from ..cli.colors import display_width
+
+    if display_width(text) > width:
+        text = "←/→ · 1-3 · q"
+    return c.dim(text, enabled)
+
+
+def _apply_tab_key(active: str, key: str) -> str | None:
+    """Return new active tab, or None if key means quit. Unknown keys keep tab."""
+    if key == QUIT:
+        return None
+    idx = TABS.index(active) if active in TABS else 1
+    if key == LEFT:
+        return TABS[(idx - 1) % len(TABS)]
+    if key == RIGHT or key == CYCLE:
+        return TABS[(idx + 1) % len(TABS)]
+    if key == TAB1:
+        return TABS[0]
+    if key == TAB2:
+        return TABS[1]
+    if key == TAB3:
+        return TABS[2]
+    return active
 
 
 def _bar_w_for(box_w: int) -> int:
@@ -694,8 +790,10 @@ def render_frame(
         return out
 
     def footer_fill() -> list[str]:
+        # Key hints live on the tab shell footer (run()); keep a short clock here
+        # for levels that still include the scene footer region.
         ts = time.strftime("%H:%M:%S")
-        return [c.dim(f"sources: claude_code + grok  •  ctrl-c quit  •  {ts}", enabled)]
+        return [c.dim(f"sources: claude_code + grok  •  ←/→ tabs · q quit  •  {ts}", enabled)]
 
     # Height ladder: pick the richest level whose total height fits the terminal.
     # size None (tests / non-interactive) => avail_h 0 => always FULL (unchanged).
@@ -791,19 +889,32 @@ def render_frame_str(
     )
 
 
-def run(cfg):
-    """Live refreshing dashboard using fixed-height scene + Painter (plan 034).
+def _inject_tab_bar(lines: list[str], active: str, width: int, enabled: bool) -> list[str]:
+    """Replace the first header line with the tab bar (keeps chips / body)."""
+    bar = render_tab_bar(active, width, enabled)
+    if not lines:
+        return [bar]
+    out = list(lines)
+    out[0] = bar
+    return out
 
-    The 033 probe worker runs in daemon thread and populates the live snapshot
-    (via live-probe) + captures its stderr tail for the activity region.
-    Every frame: load snapshot -> overlay_cells -> build/repaint via painter.
-    Resets feed the alert region (pulsed, then blank) without changing height.
-    Full clear ONLY on resize (handled by Painter); in-place \033[K per line.
+
+def run(cfg):
+    """Live refreshing dashboard: tab shell (018) + fixed-height scene (034).
+
+    Tabs: past | present | future (start on present). Arrow/h/l/1-3/tab switch;
+    q or ctrl-c quit. Present hosts the multi-profile panels; past/future show
+    placeholders until plans 019/020. The 033 probe worker still runs for present.
+
+    Non-tty (piped): no keys, no alt-screen enter, present-only ~2 s refresh —
+    keeps `oracle dash | head` and CI safe.
     """
     last_fs = None
+    active_tab = "present"
+    kr = key_reader()  # None when stdin is not a tty
+    interactive = kr is not None and bool(getattr(sys.stdout, "isatty", lambda: False)())
 
-    # Ring buffer for probe stderr (routed to activity region). Worker writes lists
-    # but we normalize to deque for ring semantics.
+    # Ring buffer for probe stderr (routed to activity region).
     last_probe_result = {"st": None, "stderr_tail": deque(maxlen=3)}
 
     def _probe_worker():
@@ -826,10 +937,8 @@ def run(cfg):
                         except Exception:
                             snap = None
                     last_probe_result["st"] = snap
-                    # keep as deque
                     last_probe_result["stderr_tail"] = deque(tail, maxlen=3)
                 except Exception:
-                    # swallow; next cycle retries
                     pass
                 time.sleep(LIVE_PROBE_INTERVAL)
         except Exception:
@@ -838,97 +947,171 @@ def run(cfg):
     worker = threading.Thread(target=_probe_worker, daemon=True, name="live-probe-worker")
     worker.start()
 
-    # Wrap entire refresh loop in Painter (alt screen + cursor hidden; restores on any exit)
-    with Painter() as painter:
-        # Animation state (persists across frames):
-        #   disp[k]        = currently displayed bar pct, glides toward the target
-        #   prev_target[k] = last target, to detect a change worth pulsing
-        #   pulse_start[k] = when row k last changed (drives the pulse envelope)
-        disp: dict = {}
-        prev_target: dict = {}
-        pulse_start: dict = {}
-        curr = None
-        cells: dict = {}
-        snap: dict = {}
-        last_data_t = 0.0
-        reset_msg = ""
-        reset_until = 0.0
-        try:
-            while True:
-                now = time.time()
+    # Animation state (present tab):
+    disp: dict = {}
+    prev_target: dict = {}
+    pulse_start: dict = {}
+    curr = None
+    cells: dict = {}
+    snap: dict = {}
+    last_data_t = 0.0
+    reset_msg = ""
+    reset_until = 0.0
+    spin_i = 0
 
-                # Refresh data at the normal cadence only — NOT on every animation
-                # frame — so log/snapshot scanning stays cheap while bars glide at ~16fps.
-                if curr is None or (now - last_data_t) >= IDLE_DT:
-                    curr = run_forecast(now, cfg)
-                    snap = load_snapshot() or {}
-                    cells = overlay_cells(curr, snap, now)
-                    resets = detect_resets(last_fs, curr) if last_fs is not None else []
-                    last_fs = curr
-                    last_data_t = now
-                    if resets:
-                        names = ", ".join(sorted({f"{r['profile']}:{r['window']}" for r in resets}))
-                        reset_msg = (
-                            f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
-                        )
-                        reset_until = now + 6.0
-
-                probe_log = list(last_probe_result.get("stderr_tail") or [])
-
-                # --- ease displayed bars toward targets; pulse rows that changed ---
-                targets = _active_row_targets(curr, cells)
-                animating = False
-                for k, tgt in targets.items():
-                    if k not in disp:
-                        disp[k] = tgt  # snap on first sight (no gratuitous launch sweep)
-                        prev_target[k] = tgt
-                        continue
-                    if abs(tgt - prev_target.get(k, tgt)) >= CHANGE_EPS:
-                        pulse_start[k] = now
-                    prev_target[k] = tgt
-                    d = disp[k]
-                    if abs(tgt - d) < SETTLE_EPS:
-                        disp[k] = tgt
-                    else:
-                        disp[k] = d + (tgt - d) * EASE
-                        animating = True
-                for k in list(disp.keys()):  # forget rows that vanished
-                    if k not in targets:
-                        disp.pop(k, None)
-                        prev_target.pop(k, None)
-                        pulse_start.pop(k, None)
-                pulse: dict = {}
-                for k, st in list(pulse_start.items()):
-                    lv = _pulse_level(st, now)
-                    if lv > 0:
-                        pulse[k] = lv
-                        animating = True
-                    else:
-                        pulse_start.pop(k, None)
-
-                # render base, adapting detail to the real terminal size (height ladder
-                # + true width). base[HEADER_H] is the alert line for every level that
-                # keeps the alert region (all but the header-only "tiny" level).
-                size = shutil.get_terminal_size((80, 24))
-                base = render_frame(
-                    curr,
-                    now,
-                    color=None,
-                    cells=cells,
-                    probe_log=probe_log,
-                    snapshot=snap,
-                    size=size,
-                    anim_pct=disp,
-                    pulse=pulse,
+    # key reader + painter both use context managers; finally restores termios
+    # (keys) and alt screen (Painter / screen.LEAVE).
+    key_cm = kr if kr is not None else _NullCM()
+    try:
+        with key_cm, Painter() as painter:
+            # First frame: tab bar + spinner before the (possibly slow) first forecast.
+            size = shutil.get_terminal_size((80, 24))
+            w = max(1, int(size.columns))
+            enabled = c.color_enabled()
+            if interactive:
+                spin = _SPINNER[spin_i % len(_SPINNER)]
+                spin_i += 1
+                painter.paint(
+                    [
+                        render_tab_bar(active_tab, w, enabled),
+                        "",
+                        c.dim(f"  {spin} consulting the oracle…", enabled),
+                        "",
+                        render_footer(w, enabled),
+                    ]
                 )
-                if reset_msg and now < reset_until and len(base) > HEADER_H:
-                    base[HEADER_H] = c.pulse(
-                        c.violet(reset_msg, c.color_enabled()), c.color_enabled()
-                    )
-                    animating = True  # keep repainting so the reset banner pulses
 
-                painter.paint(base)
-                time.sleep(FAST_DT if animating else IDLE_DT)
-        except KeyboardInterrupt:
-            # __exit__ of Painter runs on return (restores alt screen + cursor)
-            return 0
+            try:
+                while True:
+                    now = time.time()
+                    size = shutil.get_terminal_size((80, 24))
+                    w = max(1, int(size.columns))
+                    enabled = c.color_enabled()
+
+                    # Poll keys every tick when interactive (instant response).
+                    if kr is not None:
+                        for key in kr.poll(0.0 if not interactive else 0.0):
+                            nxt = _apply_tab_key(active_tab, key)
+                            if nxt is None:
+                                return 0
+                            active_tab = nxt
+
+                    # Data refresh cadence: ~1 s (engine still gates aggregate at 30 s).
+                    # Non-interactive falls back to ~2 s present-only loop.
+                    data_dt = 1.0 if interactive else 2.0
+                    if curr is None or (now - last_data_t) >= data_dt:
+                        curr = run_forecast(now, cfg)
+                        snap = load_snapshot() or {}
+                        cells = overlay_cells(curr, snap, now)
+                        resets = detect_resets(last_fs, curr) if last_fs is not None else []
+                        last_fs = curr
+                        last_data_t = now
+                        if resets:
+                            names = ", ".join(
+                                sorted({f"{r['profile']}:{r['window']}" for r in resets})
+                            )
+                            reset_msg = (
+                                f"{c.M_RESET} Your reset happened — {names}  (limits refreshed!)"
+                            )
+                            reset_until = now + 6.0
+
+                    animating = False
+                    if active_tab == "present":
+                        probe_log = list(last_probe_result.get("stderr_tail") or [])
+                        targets = _active_row_targets(curr, cells)
+                        for k, tgt in targets.items():
+                            if k not in disp:
+                                disp[k] = tgt
+                                prev_target[k] = tgt
+                                continue
+                            if abs(tgt - prev_target.get(k, tgt)) >= CHANGE_EPS:
+                                pulse_start[k] = now
+                            prev_target[k] = tgt
+                            d = disp[k]
+                            if abs(tgt - d) < SETTLE_EPS:
+                                disp[k] = tgt
+                            else:
+                                disp[k] = d + (tgt - d) * EASE
+                                animating = True
+                        for k in list(disp.keys()):
+                            if k not in targets:
+                                disp.pop(k, None)
+                                prev_target.pop(k, None)
+                                pulse_start.pop(k, None)
+                        pulse: dict = {}
+                        for k, st in list(pulse_start.items()):
+                            lv = _pulse_level(st, now)
+                            if lv > 0:
+                                pulse[k] = lv
+                                animating = True
+                            else:
+                                pulse_start.pop(k, None)
+
+                        base = render_frame(
+                            curr,
+                            now,
+                            color=None,
+                            cells=cells,
+                            probe_log=probe_log,
+                            snapshot=snap,
+                            size=size,
+                            anim_pct=disp,
+                            pulse=pulse,
+                        )
+                        if interactive:
+                            base = _inject_tab_bar(base, active_tab, w, enabled)
+                        if reset_msg and now < reset_until and len(base) > HEADER_H:
+                            base[HEADER_H] = c.pulse(c.violet(reset_msg, enabled), enabled)
+                            animating = True
+                        painter.paint(base)
+                    else:
+                        # Past / Future placeholder panels (019/020 replace).
+                        body = render_placeholder(active_tab, w, enabled)
+                        frame = [
+                            render_tab_bar(active_tab, w, enabled),
+                            c.dim("─" * min(w, 60), enabled),
+                            *body,
+                            render_footer(w, enabled),
+                        ]
+                        painter.paint(frame)
+
+                    # Sleep: poll-friendly when interactive; keys also polled after sleep.
+                    if interactive:
+                        sleep_s = FAST_DT if animating else 0.25
+                        # Drain keys during the wait slice for snappy switching.
+                        end = time.time() + sleep_s
+                        while True:
+                            remaining = end - time.time()
+                            if remaining <= 0:
+                                break
+                            for key in kr.poll(min(0.25, remaining)):
+                                nxt = _apply_tab_key(active_tab, key)
+                                if nxt is None:
+                                    return 0
+                                if nxt != active_tab:
+                                    active_tab = nxt
+                                    break  # re-render immediately
+                            else:
+                                continue
+                            break
+                    else:
+                        time.sleep(2.0)
+            except KeyboardInterrupt:
+                return 0
+    finally:
+        # belt-and-suspenders: ensure leave sequences if painter was skipped
+        pass
+    return 0
+
+
+class _NullCM:
+    """No-op context manager when key input is unavailable."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return None
+
+    def poll(self, timeout=0.25):
+        return []

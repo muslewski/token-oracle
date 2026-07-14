@@ -101,9 +101,9 @@ class Scene:
 class Painter:
     """Owns the terminal for stable in-place repaints using alt screen.
 
-    enter(): switches to alternate screen buffer and hides cursor.
-    exit(): restores primary screen and shows cursor. Must be called on
-    every exit path (use as context manager; run() adds try/finally too).
+    enter(): switches to alternate screen buffer and hides cursor (via
+    dashboard.screen sequences). exit(): restores primary screen and shows
+    cursor. Must be called on every exit path (use as context manager).
 
     paint(lines): moves cursor home, erases to EOL per line. Issues a full
     clear (\033[2J) ONLY on detected terminal size change since last paint.
@@ -124,9 +124,16 @@ class Painter:
         return None
 
     def enter(self) -> None:
-        sys.stdout.write("\033[?1049h\033[?25l")
-        sys.stdout.flush()
-        self._entered = True
+        from .screen import ENTER
+
+        # Only enter alt screen on a real TTY (piped dash stays non-interactive)
+        is_tty = bool(getattr(sys.stdout, "isatty", lambda: False)())
+        if is_tty:
+            sys.stdout.write(ENTER)
+            sys.stdout.flush()
+            self._entered = True
+        else:
+            self._entered = False
         try:
             sz = shutil.get_terminal_size((80, 24))
             self._prev_size = (sz.columns, sz.lines)
@@ -136,8 +143,10 @@ class Painter:
     def exit(self) -> None:
         if not self._entered:
             return
+        from .screen import LEAVE
+
         try:
-            sys.stdout.write("\033[?1049l\033[?25h\033[0m\n")
+            sys.stdout.write(LEAVE + "\033[0m\n")
             sys.stdout.flush()
         finally:
             self._entered = False
