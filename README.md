@@ -67,7 +67,8 @@ pip install token-oracle       # pip
 ```bash
 token-oracle init         # guided setup (or --preset max20 for non-interactive)
 token-oracle forecast     # live forecast — time left before your cap
-token-oracle dash         # full-screen TUI — Past / Present / Future tabs
+token-oracle report       # what you spent, day by day (tokens + cost + % of weekly cap)
+token-oracle dash         # full-screen TUI — Past ledger / Present live / Future prophecy
 token-oracle doctor       # check configuration + data sources
 ```
 
@@ -89,6 +90,10 @@ Supported sources (first-class agent harnesses):
 
 Multi-subscription: put `"profiles": {"claude": {...}, "grok": {...}}` in config.json to track both Claude Code (Max20 etc) and Grok/SuperGrok Heavy simultaneously. `oracle dash` shows side-by-side with reset alarms.
 
+**Future tab** (in `oracle dash`): per-window prophecy lines, observational
+cap ETA warnings, and a next-24h expected-burn sparkline from the hour-of-week
+profile — the projection math rendered, not just a single %.
+
 ## Parts & options
 
 All subcommands accept `--config FILE`. Without it, resolution is
@@ -102,7 +107,8 @@ All subcommands accept `--config FILE`. Without it, resolution is
 | `statusline` | — | Emit plain-text/ANSI statusline fragment |
 | `tmux` | — | Emit tmux `status-right` fragment |
 | `doctor` | — | Check configuration and data sources |
-| `dash` | — | Full-screen TUI (Past / Present / Future; ←/→ or h/l, 1–3, q) |
+| `report` | `--days`, `--by`, `--json`, `--since/--until` | Daily (or week/model) token + cost ledger |
+| `dash` | — | Full-screen TUI: Past ledger, Present live, Future prophecy + 24h sparkline |
 | `clean` | `--yes` | Remove config, cache, and snapshot files |
 
 Grok Build users: `{"source": "grok"}` (or with `source_opts.sessions_dir`) in config; then `oracle tmux` / `statusline` / `forecast` surface usage. Hooks in `~/.grok/hooks/` can drive `oracle snapshot`.
@@ -112,10 +118,11 @@ Full reference: `token-oracle <subcommand> --help`
 ## CLI reference
 
 ```
-token-oracle {forecast,snapshot,statusline,tmux,doctor,dash,init,clean} [OPTIONS]
+token-oracle {forecast,report,snapshot,statusline,tmux,doctor,dash,init,clean} [OPTIONS]
 
 token-oracle init       [--config FILE] [--preset NAME] [--force]
 token-oracle forecast   [--config FILE] [--json]
+token-oracle report     [--config FILE] [--days N] [--by day|week|model] [--json]
 token-oracle snapshot   [--config FILE] [--out FILE]
 token-oracle statusline [--config FILE]
 token-oracle tmux       [--config FILE]

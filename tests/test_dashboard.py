@@ -4,6 +4,7 @@ import re
 from token_oracle.cli.colors import display_width
 from token_oracle.core.contracts import Forecast
 from token_oracle.core.engine import detect_resets
+from token_oracle.core.report import LedgerRow
 from token_oracle.dashboard.app import (
     BAR_W,
     TABS,
@@ -19,6 +20,13 @@ from token_oracle.dashboard.app import (
     render_placeholder,
     render_tab_bar,
 )
+from token_oracle.dashboard.future import (
+    cost_pace_line,
+    prophecy_line,
+    render_future,
+    spark_next24,
+)
+from token_oracle.dashboard.past import render_past, short_model, top_models_by_day
 from token_oracle.live.contract import STATE_OK
 from token_oracle.live.overlay import LiveCell
 
@@ -516,3 +524,150 @@ def test_apply_tab_key_navigation():
     assert _apply_tab_key("present", "quit") is None
     assert _apply_tab_key("present", "other") == "present"
     assert set(TABS) == {"past", "present", "future"}
+
+
+# --- plan 019 past tab ------------------------------------------------------
+
+
+def _ledger_rows():
+    return [
+        LedgerRow("2026-07-01", 100_000, 1.5, 0, 1.25),
+        LedgerRow("2026-07-02", 500_000, 4.31, 0, 6.25),
+        LedgerRow("2026-07-03", 0, 0.0, 0, 0.0),
+        LedgerRow("TOTAL", 600_000, 5.81, 12000, 7.5),
+    ]
+
+
+def test_render_past_shows_dates_and_tokens():
+    lines = render_past(_ledger_rows(), 120, False, days=3)
+    text = "\n".join(lines)
+    assert "Jul" in text
+    assert "500" in text or "0.5M" in text or "500k" in text
+    assert "TOTAL" in text
+    assert "Past" in text
+    assert "\033" not in text
+
+
+def test_render_past_width_60_hides_bar():
+    wide = "\n".join(render_past(_ledger_rows(), 120, False))
+    narrow = "\n".join(render_past(_ledger_rows(), 60, False))
+    assert "▇" in wide or "░" in wide
+    assert "▇" not in narrow  # bar dropped under 72
+
+
+def test_render_past_unpriced_warning():
+    rows = [
+        LedgerRow("2026-07-02", 1000, None, 1000, None),
+        LedgerRow("TOTAL", 1000, None, 1000, None),
+    ]
+    text = "\n".join(render_past(rows, 100, False, show_cost=True))
+    assert "unpriced" in text
+
+
+def test_render_past_cost_off_hides_usd():
+    text = "\n".join(render_past(_ledger_rows(), 120, False, show_cost=False))
+    assert "$" not in text
+
+
+def test_top_models_by_day():
+    # 8-field events around a fixed day
+    import time as _t
+
+    # use local noon today-ish via fixed ts if TZ set; synthetic labels via day_key
+    now = 1_751_500_000.0
+    day = _t.strftime("%Y-%m-%d", _t.localtime(now))
+    events = [
+        [now - 100, 100, "claude-sonnet-4-5", 50, 50, 0, 0, None],
+        [now - 50, 900, "claude-opus-4", 400, 500, 0, 0, None],
+    ]
+    tops = top_models_by_day(events, now, days=3)
+    assert day in tops
+    assert "opus" in tops[day] or "sonnet" in tops[day]
+    assert short_model("claude-sonnet-4") == "sonnet-4"
+
+
+# --- plan 020 future tab ----------------------------------------------------
+
+
+def test_spark_flat_profile():
+    prof = [1.0] * 168
+    s, total = spark_next24(prof, 1_000_000.0)
+    assert len(s) == 24
+    assert total > 0
+    # flat => all equal non-empty chars
+    assert len(set(s)) == 1
+
+
+def test_spark_empty_profile():
+    assert spark_next24(None, 0.0) == ("", 0.0)
+    assert spark_next24([], 0.0) == ("", 0.0)
+
+
+def test_spark_hot_bucket():
+    prof = [0.0] * 168
+    # put heat in every bucket so integral is non-zero; one hour much hotter
+    from token_oracle.core.timeutil import bucket_key
+
+    now = 1_751_500_000.0
+    for i in range(24):
+        b = bucket_key(now + i * 3600.0)
+        prof[b] = 10.0 if i == 5 else 1.0
+    s, total = spark_next24(prof, now)
+    assert "█" in s
+    assert s[5] == "█" or s.count("█") >= 1
+    assert total > 0
+
+
+def test_prophecy_templates():
+    active = Forecast("5h", 1000, 10000, 40.0, None, 3600.0, False)
+    p = prophecy_line(active, False)
+    assert "current pace" in p
+
+    approach = Forecast("5h", 9000, 10000, 90.0, None, 3600.0, False)
+    p = prophecy_line(approach, False)
+    assert "approaching" in p
+
+    over = Forecast("5h", 12000, 10000, 130.0, 5000.0, 3600.0, False)
+    p = prophecy_line(over, False)
+    assert "the cap falls" in p
+
+    idle = Forecast("5h", 0, 10000, 0.0, None, 7200.0, True)
+    p = prophecy_line(idle, False)
+    assert "sleeps" in p
+
+
+def test_prophecy_confidence_gate():
+    f = Forecast("5h", 1000, 10000, 40.0, None, 3600.0, False, confidence=1.0)
+    assert "confidence" not in prophecy_line(f, False)
+    f2 = Forecast("5h", 1000, 10000, 40.0, None, 3600.0, False, confidence=0.7)
+    assert "confidence 70%" in prophecy_line(f2, False)
+
+
+def test_render_future_window_and_warning():
+    fs = [
+        Forecast("5h", 1000, 10000, 78.0, 90000.0, 8000.0, False, profile="claude"),
+        Forecast("weekly", 100, 1000, 40.0, None, 400000.0, False, profile="claude"),
+    ]
+    text = "\n".join(render_future(fs, [1.0] * 168, 1_000_000.0, 100, False))
+    assert "5h" in text and "78%" in text
+    assert "resets" in text
+    assert "cap in" in text  # eta set on 5h
+    assert "prophecy" in text
+    assert "next 24h" in text
+    assert "\033" not in text
+
+
+def test_render_future_no_warning_without_eta():
+    fs = [Forecast("5h", 1000, 10000, 40.0, None, 3600.0, False)]
+    text = "\n".join(render_future(fs, None, 0.0, 80, False))
+    assert "cap in" not in text
+    assert "no burn history" in text
+
+
+def test_render_future_cost_line():
+    fs = [Forecast("5h", 1000, 10000, 40.0, None, 3600.0, False)]
+    with_c = "\n".join(render_future(fs, None, 0.0, 80, False, cost_line="spend pace: ~$1.00/day"))
+    without = "\n".join(render_future(fs, None, 0.0, 80, False, cost_line=None))
+    assert "spend pace" in with_c
+    assert "spend pace" not in without
+    assert cost_pace_line(7.0, days=7).startswith("spend pace:")

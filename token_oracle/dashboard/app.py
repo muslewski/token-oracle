@@ -26,8 +26,10 @@ from ..live.contract import (
 )
 from ..live.overlay import overlay_cells, rate_info
 from ..live.store import load_snapshot
+from .future import cost_pace_line, render_future
 from .keys import CYCLE, LEFT, QUIT, RIGHT, TAB1, TAB2, TAB3
 from .keys import reader as key_reader
+from .past import render_past_sections, top_models_by_day
 from .scene import Painter, Region, Scene
 
 BAR_W = 22  # default/maximum gauge width
@@ -36,11 +38,12 @@ MIN_BOX = 34  # min box width that still fits "glyph name pct bar reset"
 BOX_MAX = 66  # widest stacked box (unchanged from today)
 BARS_MIN = 16  # min width for borderless slider bars (below this -> compact text)
 
-# Tab shell (plan 018). Present hosts the fixed-region scene (plan 034);
-# past/future ship as placeholders until plans 019/020 fill them.
+# Tab shell (plan 018). Present = fixed-region scene (034); past/future filled by 019/020.
 TABS = ("past", "present", "future")
 TAB_LABELS = {"past": "Past", "present": "Present", "future": "Future"}
 _SPINNER = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+PAST_DAYS = 14
+TAB_DATA_TTL = 30.0  # seconds between past/future data refreshes
 
 
 def _clamp(v, lo, hi):
@@ -84,7 +87,7 @@ def render_tab_bar(active: str, width: int, enabled: bool) -> str:
 
 
 def render_placeholder(tab: str, width: int, enabled: bool) -> list[str]:
-    """Pure past/future placeholder panel (plans 019/020 replace these)."""
+    """Legacy placeholder (kept for tests / unknown tabs). Past/Future use real renderers."""
     tab = (tab or "past").lower()
     if tab == "future":
         msg = "the oracle is still learning to read the future"
@@ -99,10 +102,114 @@ def render_placeholder(tab: str, width: int, enabled: bool) -> list[str]:
         "",
         c.dim(f"  tab: {tab}", enabled),
     ]
-    # pad to a modest panel height so Painter doesn't flash empty
     while len(lines) < 8:
         lines.append("")
     return lines
+
+
+def _wins_from_raw(wraw):
+    """Normalize window configs to Window-like objects for weekly_cap."""
+    wins = []
+    for w in wraw or []:
+        if hasattr(w, "cap"):
+            wins.append(w)
+        elif isinstance(w, dict):
+            try:
+                from ..core.config import _window_from_dict
+
+                wins.append(_window_from_dict(w))
+            except Exception:
+                continue
+    return wins
+
+
+def _past_sections_for_dash(cfg, now: float, days: int = 14) -> list[dict]:
+    """Build past-tab sections from the on-disk event cache (reuse report core)."""
+    from ..core import report as report_mod
+    from ..core.cache import load_cache
+    from ..core.engine import cached_events
+
+    mode = getattr(cfg, "cost_mode", "auto") or "auto"
+    overrides = getattr(cfg, "pricing", None) or {}
+    sections: list[dict] = []
+
+    if getattr(cfg, "profiles", None):
+        try:
+            cache = load_cache(getattr(cfg, "cache_path", "") or "") or {}
+        except Exception:
+            cache = {}
+        profiles_cache = cache.get("profiles") if isinstance(cache, dict) else {}
+        if not isinstance(profiles_cache, dict):
+            profiles_cache = {}
+        for pname in sorted(cfg.profiles.keys()):
+            pdef = cfg.profiles.get(pname) or {}
+            slc = profiles_cache.get(pname) or {}
+            evs = (slc.get("events") if isinstance(slc, dict) else None) or []
+            wins = _wins_from_raw(pdef.get("windows") or cfg.windows)
+            cap = report_mod.weekly_cap(wins) or 0
+            rows = report_mod.daily_ledger(evs, cap, now, days=days, mode=mode, overrides=overrides)
+            sections.append(
+                {
+                    "profile": pname,
+                    "rows": rows,
+                    "tops": top_models_by_day(evs, now, days=days),
+                }
+            )
+        if sections:
+            return sections
+
+    try:
+        evs = cached_events(cfg) or []
+    except Exception:
+        evs = []
+    cap = report_mod.weekly_cap(getattr(cfg, "windows", None) or []) or 0
+    rows = report_mod.daily_ledger(evs, cap, now, days=days, mode=mode, overrides=overrides)
+    sections.append(
+        {
+            "profile": getattr(cfg, "source", "default") or "default",
+            "rows": rows,
+            "tops": top_models_by_day(evs, now, days=days),
+        }
+    )
+    return sections
+
+
+def _future_extras(cfg, now: float):
+    """Return (profile_list, cost_line) for the future tab from cache."""
+    from ..core import pricing as pricing_mod
+    from ..core.cache import load_cache
+    from ..core.engine import cached_events
+
+    profile = None
+    try:
+        cache = load_cache(getattr(cfg, "cache_path", "") or "") or {}
+        profile = cache.get("profile") or None
+        if not profile and isinstance(cache.get("profiles"), dict):
+            for slc in cache["profiles"].values():
+                if isinstance(slc, dict) and slc.get("profile"):
+                    profile = slc.get("profile")
+                    break
+    except Exception:
+        profile = None
+
+    cost_line = None
+    mode = getattr(cfg, "cost_mode", "auto") or "auto"
+    if mode != "off":
+        try:
+            evs = cached_events(cfg) or []
+            cutoff = now - 7 * 86400
+            recent = [e for e in evs if isinstance(e, (list, tuple)) and e[0] >= cutoff]
+            summary = pricing_mod.cost_summary(recent, mode, getattr(cfg, "pricing", None) or {})
+            usd = summary.get("usd")
+            if recent and summary.get("unpriced_tokens", 0) == sum(
+                int(e[1]) for e in recent if len(e) > 1
+            ):
+                cost_line = None
+            elif usd is not None:
+                cost_line = cost_pace_line(float(usd), days=7)
+        except Exception:
+            cost_line = None
+    return profile, cost_line
 
 
 def render_footer(width: int, enabled: bool) -> str:
@@ -914,6 +1021,14 @@ def run(cfg):
     kr = key_reader()  # None when stdin is not a tty
     interactive = kr is not None and bool(getattr(sys.stdout, "isatty", lambda: False)())
 
+    # Past/Future data box (refreshed at most every TAB_DATA_TTL seconds).
+    tab_data = {
+        "fetched_at": 0.0,
+        "past_sections": None,
+        "profile": None,
+        "cost_line": None,
+    }
+
     # Ring buffer for probe stderr (routed to activity region).
     last_probe_result = {"st": None, "stderr_tail": deque(maxlen=3)}
 
@@ -1065,12 +1180,51 @@ def run(cfg):
                             animating = True
                         painter.paint(base)
                     else:
-                        # Past / Future placeholder panels (019/020 replace).
-                        body = render_placeholder(active_tab, w, enabled)
+                        # Past / Future real panels (019 / 020). Refresh data ≤ every 30s.
+                        if (now - tab_data["fetched_at"]) >= TAB_DATA_TTL or tab_data[
+                            "past_sections"
+                        ] is None:
+                            try:
+                                tab_data["past_sections"] = _past_sections_for_dash(
+                                    cfg, now, days=PAST_DAYS
+                                )
+                            except Exception:
+                                tab_data["past_sections"] = []
+                            try:
+                                prof, cline = _future_extras(cfg, now)
+                                tab_data["profile"] = prof
+                                tab_data["cost_line"] = cline
+                            except Exception:
+                                tab_data["profile"] = None
+                                tab_data["cost_line"] = None
+                            tab_data["fetched_at"] = now
+
+                        show_cost = (getattr(cfg, "cost_mode", "auto") or "auto") != "off"
+                        if active_tab == "past":
+                            body = render_past_sections(
+                                tab_data["past_sections"] or [],
+                                w,
+                                enabled,
+                                days=PAST_DAYS,
+                                show_cost=show_cost,
+                            )
+                        else:
+                            # Ensure forecasts exist even if data_dt hasn't fired yet
+                            if curr is None:
+                                curr = run_forecast(now, cfg)
+                            body = render_future(
+                                curr,
+                                tab_data.get("profile"),
+                                now,
+                                w,
+                                enabled,
+                                cost_line=tab_data.get("cost_line"),
+                            )
                         frame = [
                             render_tab_bar(active_tab, w, enabled),
                             c.dim("─" * min(w, 60), enabled),
                             *body,
+                            "",
                             render_footer(w, enabled),
                         ]
                         painter.paint(frame)

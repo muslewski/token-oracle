@@ -26,10 +26,19 @@ oracle dash                      # live TUI — Past / Present / Future tabs
 ```
 
 Interactive terminal: arrow keys (or `h`/`l`) switch tabs, `1`–`3` jump,
-`Tab` cycles, `q` quits. Present is the live multi-profile forecast view;
-Past and Future are placeholders until the report/forecast-detail work
-lands. Piped / non-TTY output falls back to a non-interactive Present
-refresh (~2 s) so `oracle dash | head` stays usable.
+`Tab` cycles, `q` quits.
+
+- **Present** — live multi-profile forecast (boxes / bars, live overlay)
+- **Past** — last 14 days token + cost ledger (same engine as `oracle report`)
+- **Future** — per-window prophecy, ETA warnings, next-24h burn sparkline
+
+Piped / non-TTY output falls back to a non-interactive Present refresh
+(~2 s) so `oracle dash | head` stays usable.
+
+```bash
+oracle report --days 14          # static daily ledger
+oracle report --json             # machine-readable sections
+```
 
 ### Tier 3 — + statusline / tmux integration
 
