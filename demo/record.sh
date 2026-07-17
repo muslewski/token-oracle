@@ -10,7 +10,11 @@ GREEN_DEMO="${GREEN_DEMO:-$HOME/.local/lib/green-demo.sh}"
 }
 # shellcheck disable=SC1090
 . "$GREEN_DEMO"
+# Capture real user base before sandbox remaps HOME (vhs inherits this env).
+REAL_PYTHONUSERBASE="$HOME/.local"
 demo_sandbox "$PWD" # exports HOME + 4 XDG vars, runs fixtures/gen.sh
+export PYTHONUSERBASE="$REAL_PYTHONUSERBASE"
+export TOKEN_ORACLE_SKIP_BOOTSTRAP=1
 # token-oracle demos do not need the isolated tmux server
 for tape in scenes/*.tape; do
   demo_record "$tape"
