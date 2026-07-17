@@ -13,12 +13,10 @@
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
 </p>
 
-<p align="center">
-  <img src="./assets/dash-demo.gif" alt="token-oracle dash — live forecast of Claude Code and Grok token usage, with time left before each cap" width="720">
-</p>
+<p align="center"><img src="./assets/demo-dash.gif" width="720" alt="oracle dash demo"></p>
 
 <p align="center">
-  <sub><b>Live dashboard</b> — real, browser-verified usage for <b>Claude Code and Grok</b>, with time left before each cap. No API keys; reads local logs, optionally verifies against the sites.</sub>
+  <sub><b>Live dashboard</b> — staged multi-subscription forecast for <b>Claude Code and Grok</b>, with time left before each cap. No API keys; reads local logs, optionally verifies against the sites.</sub>
 </p>
 
 ## Live usage in your status bar
@@ -71,6 +69,12 @@ token-oracle report       # what you spent, day by day (tokens + cost + % of wee
 token-oracle dash         # full-screen TUI — Past ledger / Present live / Future prophecy
 token-oracle doctor       # check configuration + data sources
 ```
+
+<p align="center"><img src="./assets/demo-forecast.gif" width="600" alt="oracle forecast demo"></p>
+
+<details><summary>▶ demo</summary>
+<p><img src="./assets/demo-doctor.gif" width="600" alt="oracle doctor demo"></p>
+</details>
 
 Config can live globally (`~/.config/token-oracle/config.json`) or per-project
 (`.token-oracle.json` walking up from the cwd). Run `token-oracle --help` for
