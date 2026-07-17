@@ -26,6 +26,16 @@ M_WARN = "⚠"
 M_BULLET = "●"
 M_OK = "✓"
 M_BAD = "✗"
+M_CLOCK = "🕐"
+M_HEAD = "◔"
+M_PEND = "◌"
+
+# One arrow glyph for every human-facing surface (statusline, tmux, forecast).
+ARROW = "→"
+
+# U+2581–2588 block ramp (+ leading space for zero). Shared by forecast burn,
+# report %CAP column, and any CLI spark.
+SPARK_CHARS = " ▁▂▃▄▅▆▇█"
 
 
 def _no_color():
@@ -178,3 +188,78 @@ def box_line(text, width=40, enabled=True):
         text = "".join(out)
     pad = " " * (inner_w - display_width(text))
     return f"│{text}{pad}│"
+
+
+def strip_ansi(s: str) -> str:
+    """Remove ANSI SGR/erase sequences; plain text for width/golden asserts."""
+    return _ANSI_RE.sub("", s or "")
+
+
+def sparkline(values, width=None) -> str:
+    """Map a sequence of numbers to U+2581–2588 (stdlib only, no color).
+
+    Empty → ``""``. Constant series → mid-level bars. Optional ``width``
+    resamples by averaging buckets so a long series fits a fixed cell budget.
+    """
+    if not values:
+        return ""
+    nums = [float(v) for v in values]
+    if width is not None and width > 0 and len(nums) != width:
+        # bucket-average resample
+        out_n = int(width)
+        bucket = len(nums) / out_n
+        resampled = []
+        for i in range(out_n):
+            a = int(i * bucket)
+            b = max(a + 1, int((i + 1) * bucket))
+            chunk = nums[a:b] or [0.0]
+            resampled.append(sum(chunk) / len(chunk))
+        nums = resampled
+    lo = min(nums)
+    hi = max(nums)
+    n_levels = len(SPARK_CHARS) - 1  # 8 block levels; index 0 = space/empty
+    if hi <= lo:
+        mid = SPARK_CHARS[max(1, n_levels // 2)]
+        return mid * len(nums)
+    chars = []
+    for v in nums:
+        # 0..n_levels inclusive; tiny values can land on space when near lo
+        level = int(round((v - lo) / (hi - lo) * n_levels))
+        level = max(0, min(n_levels, level))
+        chars.append(SPARK_CHARS[level])
+    return "".join(chars)
+
+
+def gauge_bar(pct, width=12, enabled=True) -> str:
+    """Filled █/░ bar colored by gauge tier. Clamps pct to 0..100 for fill."""
+    p = max(0.0, min(100.0, float(pct)))
+    filled = int(round(width * p / 100.0))
+    filled = max(0, min(width, filled))
+    bar = "█" * filled + "░" * (width - filled)
+    return gauge(bar, float(pct), enabled)
+
+
+def severity_label(bad: int, total: int) -> str:
+    """Doctor banner word from failure count: ok / warn / crit."""
+    if bad <= 0:
+        return "ok"
+    if bad >= max(2, total // 2):
+        return "crit"
+    return "warn"
+
+
+def help_paint(text: str, role: str = "accent", enabled: bool | None = None) -> str:
+    """Argparse / help chrome — same 256 palette as the product (no 16-color dialect)."""
+    if enabled is None:
+        enabled = color_enabled(sys.stdout)
+    if not enabled:
+        return text
+    if role == "accent":
+        return violet(text, True)
+    if role == "cmd":
+        return paint(text, _TIER_CODE["green"], True)
+    if role == "opt":
+        return paint(text, "75", True)  # soft blue-ish for options
+    if role == "muted":
+        return dim(text, True)
+    return text

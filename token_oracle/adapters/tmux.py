@@ -4,22 +4,13 @@ Neutral across sources. Configure "source": "grok" (or claude_code) and use:
 set -g status-right '#(oracle tmux)'
 Grok tmux users get live token forecasts in bottom bar alongside sessions."""
 
-from ..cli import colors as c
-from ..core.timeutil import fmt_dh_long, fmt_reset, fmt_tokens
+from . import segments
 
 
-def _segment(f):
-    pct = f.projected_pct
-    prof = getattr(f, "profile", "default")
-    pre = f"{prof[0].upper()}:" if prof != "default" else ""
-    body = (
-        f"{pre}{fmt_reset(f.reset_in_secs)} "
-        f"{fmt_tokens(f.used)}/{fmt_tokens(f.cap)} ->{round(pct)}%"
+def render(forecasts, budget=None):
+    """tmux-formatted status. Shares segment body with statusline (encoding only differs)."""
+    if budget is None:
+        budget = segments.cell_budget()
+    return segments.render_adaptive(
+        forecasts, budget=budget, encoding="tmux", color=True
     )
-    if f.eta_to_cap_secs is not None:
-        body += f" cap {fmt_dh_long(f.eta_to_cap_secs)}"
-    return f"{c.gauge_tmux(pct)}{body}#[default]"
-
-
-def render(forecasts):
-    return " ".join(_segment(f) for f in forecasts if not f.idle)
