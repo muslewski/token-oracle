@@ -13,6 +13,12 @@ import token_oracle.cli.main as cli_main
 from token_oracle.cli.main import main
 
 
+@pytest.fixture(autouse=True)
+def _hermetic_live_store(monkeypatch, tmp_path):
+    """CLI forecast/statusline paths read live.json + ratelimits via XDG."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+
+
 def _cfg(tmp_path, feed_events, now, extra=None):
     feed = tmp_path / "feed.json"
     feed.write_text(json.dumps(feed_events))
@@ -82,7 +88,10 @@ def test_doctor_exit_zero_with_events(tmp_path, monkeypatch):
     assert main(["doctor", "--config", cfg, "--now", str(now)]) == 0
 
 
-def test_statusline_runs(tmp_path, capsys):
+def test_statusline_runs(tmp_path, capsys, monkeypatch):
+    # Hermetic: real ~/.local/share/token-oracle/ratelimits.json must not
+    # flip the render into the header-headline path (used/cap tokens vanish).
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     now = 100000.0
     cfg = _cfg(tmp_path, [[now - 100.0, 250]], now)
     assert main(["statusline", "--config", cfg, "--now", str(now)]) == 0
