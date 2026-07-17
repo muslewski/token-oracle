@@ -6,9 +6,12 @@ Set via config "source". tmux/statusline work for all."""
 import argparse
 import json
 import os
+import shutil
+import subprocess
 import sys
 import time
 
+from ..adapters import segments as seg
 from ..adapters import statusline as sl
 from ..adapters import tmux as tx
 from ..cli import colors
@@ -27,7 +30,7 @@ from ..core.config import (
 from ..core.engine import cached_events
 from ..core.engine import forecast as run_forecast
 from ..core.profile import HIST_SECS
-from ..core.timeutil import fmt_dur, fmt_tokens
+from ..core.timeutil import fmt_dur, fmt_reset, fmt_tokens
 from ..snapshot.writer import build_snapshot, default_snapshot_path, write_snapshot
 from ..sources.base import available, get_source
 
@@ -45,6 +48,122 @@ _CMD_HELP = {
     "live-setup": "one-time browser login to grok.com / claude.ai for live data",
     "live-probe": "run the live web probe now and print what it found",
 }
+
+# Subcommand order for the zero-arg palette (discovery-first).
+_PALETTE_ORDER = (
+    "dash",
+    "forecast",
+    "doctor",
+    "report",
+    "statusline",
+    "tmux",
+    "snapshot",
+    "init",
+    "live",
+    "live-setup",
+    "live-probe",
+    "clean",
+)
+
+
+# ---------------------------------------------------------------------------
+# fzf / command palette (optional; degrade cleanly without fzf)
+# ---------------------------------------------------------------------------
+
+
+def _fzf_available() -> bool:
+    return bool(shutil.which("fzf"))
+
+
+def _palette_eligible() -> bool:
+    """TTY stdin+stdout and fzf on PATH — gate for zero-arg command palette."""
+    try:
+        if not (sys.stdin.isatty() and sys.stdout.isatty()):
+            return False
+    except Exception:
+        return False
+    return _fzf_available()
+
+
+def _palette_rows() -> list[str]:
+    """One ``name<TAB-or-spaces>description`` row per subcommand."""
+    rows = []
+    ordered = [n for n in _PALETTE_ORDER if n in _CMD_HELP]
+    for n in ordered:
+        rows.append(f"{n:<12} {_CMD_HELP[n]}")
+    # any extras not in the preferred order
+    for n, help_ in _CMD_HELP.items():
+        if n not in ordered:
+            rows.append(f"{n:<12} {help_}")
+    return rows
+
+
+def _fzf_pick(rows, *, prompt="oracle › ", preview_cmd=None, header=None) -> str | None:
+    """Run fzf over ``rows``; return the selected raw row or None (cancel/error)."""
+    if not rows or not _fzf_available():
+        return None
+    cmd = [
+        "fzf",
+        "--layout=reverse",
+        "--height=60%",
+        "--border=rounded",
+        "--info=inline",
+        f"--prompt={prompt}",
+        "--pointer=▶",
+    ]
+    if header:
+        cmd.append(f"--header={header}")
+    if preview_cmd:
+        cmd.extend(["--preview", preview_cmd, "--preview-window=right,50%,border-rounded"])
+    try:
+        proc = subprocess.run(
+            cmd,
+            input="\n".join(rows) + "\n",
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    if proc.returncode != 0:
+        return None
+    line = (proc.stdout or "").strip().splitlines()
+    return line[0] if line else None
+
+
+def _run_command_palette() -> str | None:
+    """fzf command palette; returns selected subcommand name or None."""
+    rows = _palette_rows()
+    # preview: re-invoke ourselves for --help of the selected command name ({1})
+    self_py = sys.executable
+    # Use python -m so we don't depend on entry-point install in the worktree.
+    preview = (
+        f"{self_py} -m token_oracle.cli.main {{1}} --help 2>/dev/null | head -40"
+    )
+    picked = _fzf_pick(
+        rows,
+        prompt="oracle › ",
+        preview_cmd=preview,
+        header="enter: run · esc: cancel",
+    )
+    if not picked:
+        return None
+    return picked.split(None, 1)[0].strip() or None
+
+
+class _OracleHelpFormatter(argparse.RawDescriptionHelpFormatter):
+    """Help chrome via the shared colors module (no second 16-color dialect)."""
+
+    def _format_action_invocation(self, action):
+        text = super()._format_action_invocation(action)
+        if action.option_strings:
+            return colors.help_paint(text, "opt")
+        return colors.help_paint(text, "cmd")
+
+    def start_section(self, heading):
+        if heading:
+            heading = colors.help_paint(str(heading), "accent")
+        super().start_section(heading)
 
 
 def _add_common(p):
@@ -219,6 +338,138 @@ def _is_true_first_run(forecasts) -> bool:
     if not forecasts:
         return True
     return all(int(getattr(f, "used", 0) or 0) == 0 for f in forecasts)
+
+
+def _burn_hours(events, now: float, hours: int = 12) -> list[float]:
+    """Token totals per hour for the last ``hours`` hours (oldest→newest)."""
+    buckets = [0.0] * hours
+    if not events:
+        return buckets
+    start = now - hours * 3600.0
+    for e in events:
+        try:
+            ts = float(e[0])
+            tok = float(e[1])
+        except (TypeError, ValueError, IndexError):
+            continue
+        if ts < start or ts > now:
+            continue
+        idx = int((ts - start) // 3600.0)
+        if 0 <= idx < hours:
+            buckets[idx] += tok
+    return buckets
+
+
+def _forecast_hero_lines(forecasts, events, now: float, enabled: bool) -> list[str]:
+    """TTY hero card: binding window first + chips + 12h burn spark."""
+    fs = seg.dedupe_forecasts(forecasts)
+    if not fs:
+        return []
+    # binding window = highest projected_pct (the one that hurts first)
+    top = max(fs, key=lambda f: float(getattr(f, "projected_pct", 0.0) or 0.0))
+    rest = [f for f in fs if f is not top]
+    pct = float(top.projected_pct or 0.0)
+    rpct = round(pct)
+    prof = getattr(top, "profile", "default")
+    wname = getattr(top, "window", "?")
+    title_bits = [f"{colors.M_ORACLE} CAP BRIEF"]
+    if prof and prof != "default":
+        title_bits.append(str(prof))
+    # local clock for the card header
+    try:
+        hhmm = time.strftime("%H:%M", time.localtime(now))
+        title_bits.append(hhmm)
+    except Exception:
+        pass
+    title = " · ".join(title_bits)
+    width = 52
+    lines = [colors.violet(colors.box_top(title, width, enabled), enabled)]
+
+    state = "OVER" if pct >= 100 else ("HIGH" if pct >= 85 else "OK")
+    bar = colors.gauge_bar(min(pct, 100.0), width=14, enabled=enabled)
+    hero = (
+        f" {str(wname):<6} {state:<4} {bar} "
+        f"{colors.gauge(f'{rpct}%', pct, enabled)} "
+        f"{colors.ARROW} reset {fmt_reset(top.reset_in_secs)}"
+    )
+    lines.append(colors.box_line(hero, width, enabled))
+
+    burn = _burn_hours(events, now, 12)
+    spark = colors.sparkline(burn) if any(burn) else "·" * 12
+    lines.append(
+        colors.box_line(
+            colors.dim(f" {spark}  last 12h burn", enabled), width, enabled
+        )
+    )
+
+    if rest:
+        chips = []
+        for f in rest:
+            p = round(float(f.projected_pct or 0.0))
+            label = f.window
+            if getattr(f, "profile", "default") not in ("default", prof):
+                label = f"{f.profile[0].upper()}:{label}"
+            short = "wk" if str(label).lower() in ("weekly", "week") else label
+            chips.append(colors.gauge(f"{short} {p}%", float(f.projected_pct or 0), enabled))
+        lines.append(colors.box_line(" " + " · ".join(chips), width, enabled))
+
+    lines.append(colors.violet(colors.box_bot(width, enabled), enabled))
+    return lines
+
+
+def _forecast_text(forecasts, cfg, now: float, interactive: bool) -> str:
+    """Human forecast: TTY hero card; pipe/classic one-line (deduped, shared segments)."""
+    fs = seg.dedupe_forecasts(forecasts)
+    if not fs:
+        return ""
+    if interactive:
+        try:
+            evs = cached_events(cfg)
+        except Exception:
+            evs = []
+        enabled = colors.color_enabled()
+        lines = _forecast_hero_lines(forecasts, evs, now, enabled)
+        if lines:
+            return "\n".join(lines)
+    # non-TTY / fallback: one-line adaptive full (parse-friendly, no box)
+    multi = bool(getattr(cfg, "profiles", None))
+    body = sl.render(fs, color=colors.color_enabled() if interactive else colors.pipe_color())
+    if multi and body:
+        return f"(multi) {body}"
+    return body
+
+
+# Doctor: per-row fix hints (recovery commands, not buried prose).
+_DOCTOR_FIX_HINTS = {
+    "config": "fix: edit config or run `oracle init --force` to rewrite a starter",
+    "source": "fix: set \"source\" to one of: claude_code | grok | generic",
+    "data": "fix: use your agent once, or check source_opts paths (`oracle init`)",
+    "cache": "fix: delete the cache file — it rebuilds on next forecast",
+    "windows": "fix: add windows[] with name/cap/period_secs, or pick a plan preset",
+    "sage": "fix: run `oracle snapshot` (or enable snapshot_writethrough in config)",
+    "issue": "fix: open the config file and correct the reported field",
+}
+
+
+def _doctor_fix_hint(name: str, detail: str) -> str:
+    """One-line recovery hint for a failing doctor row."""
+    key = (name or "").strip().lower()
+    if key in _DOCTOR_FIX_HINTS:
+        base = _DOCTOR_FIX_HINTS[key]
+    else:
+        base = "fix: see SETUP.md / `oracle --help`"
+    dlow = (detail or "").lower()
+    if "live" in dlow and "stale" in dlow:
+        return "fix: run `oracle live-probe` (or `oracle live-setup` if needs login)"
+    if "snapshot is missing" in dlow or "snapshot is stale" in dlow:
+        return "fix: run `oracle snapshot` (or enable snapshot_writethrough)"
+    if "tokenforecastpath" in dlow:
+        return base
+    if "no events" in dlow:
+        return "fix: use Claude Code / Grok once, then re-run `oracle doctor`"
+    if "corrupt" in dlow:
+        return "fix: delete the cache path above — next forecast rebuilds it"
+    return base
 
 
 def _parse_date(s):
@@ -648,12 +899,37 @@ def _doctor_lines(cfg, config_path, color, now):
     for issue in cfg.issues:
         rows.append(("issue", issue, False))
 
-    out = [colors.violet(f"{colors.M_ORACLE} oracle doctor", color)]
     ok = 0
     for name, detail, good in rows:
         ok += 1 if good else 0
-        out.append(f"  {colors.ok_badge(good, color)} {name:<8} — {detail}")
     bad = len(rows) - ok
+    sev = colors.severity_label(bad, len(rows))
+    if sev == "ok":
+        banner = colors.paint(
+            f"{colors.M_OK} {sev.upper()} · {ok} ok · {bad} need attention",
+            "42",
+            color,
+        )
+    elif sev == "warn":
+        banner = colors.paint(
+            f"{colors.M_WARN} {sev.upper()} · {ok} ok · {bad} need attention",
+            "214",
+            color,
+        )
+    else:
+        banner = colors.paint(
+            f"{colors.M_BAD} {sev.upper()} · {ok} ok · {bad} need attention",
+            "196",
+            color,
+        )
+    out = [
+        colors.violet(f"{colors.M_ORACLE} oracle doctor", color),
+        f"  {banner}",
+    ]
+    for name, detail, good in rows:
+        out.append(f"  {colors.ok_badge(good, color)} {name:<8} — {detail}")
+        if not good:
+            out.append(colors.dim(f"           {_doctor_fix_hint(name, detail)}", color))
     out.append(colors.dim(f"  {ok} ok · {bad} need attention", color))
     if multi:
         out.append(colors.dim("  multi mode: both Claude + Grok tracked together", color))
@@ -799,7 +1075,168 @@ def _doctor_lines(cfg, config_path, color, now):
     return out, bad
 
 
+def _render_report_text(sections, args, color: bool) -> None:
+    """Aligned ledger table with %CAP spark column; optional TTY fzf drill-in."""
+    for sec in sections:
+        prof = sec.get("profile", "?")
+        by = sec.get("by", "day")
+        rows = sec.get("rows", [])
+        n_data = len([r for r in rows if r.get("label") != "TOTAL"])
+        if by == "day":
+            header = colors.violet(
+                f"{prof} · {getattr(args, 'days', 7)}-day ledger", color
+            )
+        else:
+            header = colors.violet(f"{prof} · {n_data} {by}-ledger", color)
+        print(header)
+
+        show_pct = by == "day"
+        lab_h = "DAY" if by == "day" else ("WEEK" if by == "week" else "MODEL")
+        fmt_rows = []
+        for r in rows:
+            lab = str(r.get("label", ""))
+            tok = fmt_tokens(r.get("tokens") or 0)
+            if r.get("cost") is None:
+                cst = "—"
+            else:
+                cst = f"${float(r['cost']):,.2f}"
+            pct_raw = r.get("pct_cap")
+            if show_pct and pct_raw is not None:
+                spark = _pct_spark(float(pct_raw), 8)
+                pct_plain = f"{spark} {float(pct_raw):.0f}%"
+            elif show_pct:
+                pct_plain = "—"
+            else:
+                pct_plain = ""
+            fmt_rows.append(
+                (lab, tok, cst, pct_plain, pct_raw, r.get("label") == "TOTAL")
+            )
+
+        lab_w = max([len(lab_h)] + [len(t[0]) for t in fmt_rows] + [5])
+        tok_w = max([3] + [len(t[1]) for t in fmt_rows] + [3])
+        cst_w = max([4] + [len(t[2]) for t in fmt_rows] + [4])
+        pct_w = (
+            max([4] + [colors.display_width(t[3]) for t in fmt_rows] + [4])
+            if show_pct
+            else 0
+        )
+
+        if show_pct:
+            print(f"{lab_h:<{lab_w}}  {'TOK':>{tok_w}}  {'COST':>{cst_w}}  {'%CAP':<{pct_w}}")
+            print(f"{'-' * lab_w}  {'-' * tok_w}  {'-' * cst_w}  {'-' * max(4, pct_w)}")
+        else:
+            print(f"{lab_h:<{lab_w}}  {'TOK':>{tok_w}}  {'COST':>{cst_w}}")
+            print(f"{'-' * lab_w}  {'-' * tok_w}  {'-' * cst_w}")
+
+        for lab, tok, cst, pct_plain, pct_raw, is_total in fmt_rows:
+            if is_total:
+                rule = f"{'-' * lab_w}  {'-' * tok_w}  {'-' * cst_w}"
+                if show_pct:
+                    rule += f"  {'-' * max(4, pct_w)}"
+                print(rule)
+            if show_pct and pct_raw is not None:
+                spark = _pct_spark(float(pct_raw), 8)
+                pct_cell = (
+                    f"{spark} "
+                    f"{colors.gauge(f'{float(pct_raw):.0f}%', float(pct_raw), color)}"
+                )
+                print(f"{lab:<{lab_w}}  {tok:>{tok_w}}  {cst:>{cst_w}}  {pct_cell}")
+            elif show_pct:
+                print(f"{lab:<{lab_w}}  {tok:>{tok_w}}  {cst:>{cst_w}}  {pct_plain}")
+            else:
+                print(f"{lab:<{lab_w}}  {tok:>{tok_w}}  {cst:>{cst_w}}")
+
+        all_none = all(
+            r.get("cost") is None for r in rows if (r.get("tokens") or 0) > 0
+        )
+        if all_none and any((r.get("tokens") or 0) > 0 for r in rows):
+            print(
+                colors.dim(
+                    "cost unavailable (cost_mode=off or unpriced models)", color
+                )
+            )
+        if not any((r.get("tokens") or 0) > 0 for r in rows):
+            print(colors.dim(f"no usage data for {prof} in range", color))
+
+        # TTY + fzf: day/week drill-in picker (prints detail; esc skips)
+        if (
+            show_pct
+            and _is_interactive()
+            and _fzf_available()
+            and any(
+                (r.get("tokens") or 0) > 0
+                for r in rows
+                if r.get("label") != "TOTAL"
+            )
+        ):
+            pick_rows = []
+            for r in rows:
+                if r.get("label") == "TOTAL" or not (r.get("tokens") or 0):
+                    continue
+                pct_s = (
+                    f"{r['pct_cap']:.0f}%"
+                    if r.get("pct_cap") is not None
+                    else "—"
+                )
+                pick_rows.append(
+                    f"{r['label']}\t{fmt_tokens(r.get('tokens') or 0)}\t{pct_s}"
+                )
+            if pick_rows:
+                print(colors.dim("  › fzf: pick a day for detail (esc skips)", color))
+                chosen = _fzf_pick(
+                    pick_rows,
+                    prompt="report › ",
+                    header="enter: detail · esc: skip",
+                )
+                if chosen:
+                    label = chosen.split("\t", 1)[0].strip()
+                    match = next((r for r in rows if r.get("label") == label), None)
+                    if match:
+                        print(colors.violet(f"  ── {label} ──", color))
+                        cost_s = (
+                            "—"
+                            if match.get("cost") is None
+                            else f"${match['cost']:,.2f}"
+                        )
+                        cap_s = (
+                            "—"
+                            if match.get("pct_cap") is None
+                            else f"{match['pct_cap']:.0f}%"
+                        )
+                        print(
+                            f"  tokens {fmt_tokens(match.get('tokens') or 0)}"
+                            f"  cost {cost_s}"
+                            f"  %cap {cap_s}"
+                        )
+        print()
+
+
+def _pct_spark(pct: float, width: int = 8) -> str:
+    """Mini spark ramp for a single %CAP value (0..100+ mapped across width)."""
+    p = max(0.0, float(pct))
+    # build a rising ramp capped at pct so the spark "fills" with severity
+    fill = min(1.0, p / 100.0)
+    n = max(1, int(width))
+    vals = []
+    for i in range(n):
+        edge = (i + 1) / n
+        vals.append(1.0 if edge <= fill else (fill * n - i if edge - 1 / n < fill else 0.0))
+    s = colors.sparkline(vals)
+    return s if s else "░" * n
+
+
 def main(argv=None):
+    # Zero-arg command palette (TTY + fzf). Non-TTY keeps argparse required-arg error.
+    if argv is None:
+        argv = sys.argv[1:]
+    else:
+        argv = list(argv)
+    if len(argv) == 0 and _palette_eligible():
+        picked = _run_command_palette()
+        if picked:
+            argv = [picked]
+        # if cancelled / no pick → fall through to argparse error (same as today)
+
     parser = argparse.ArgumentParser(
         prog="token-oracle",
         description=(
@@ -817,7 +1254,7 @@ def main(argv=None):
             "\n"
             "docs: https://github.com/muslewski/token-oracle"
         ),
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=_OracleHelpFormatter,
     )
     sub = parser.add_subparsers(dest="cmd", required=True, metavar="<command>")
     for name in (
@@ -838,6 +1275,7 @@ def main(argv=None):
             name,
             help=_CMD_HELP[name],
             description=_CMD_HELP[name],
+            formatter_class=_OracleHelpFormatter,
         )
         _add_common(sp)
         if name == "forecast":
@@ -978,17 +1416,16 @@ def main(argv=None):
         if args.json:
             print(json.dumps(build_snapshot(fs, now), indent=2))
         else:
-            out = sl.render(fs)
+            interactive = _is_interactive()
+            out = _forecast_text(fs, cfg, now, interactive)
             if not out:
                 # Empty render: either true first-run (no usage ever) or all
                 # windows currently idle after real use. Only the former gets
                 # onboarding on a TTY; session-idle keeps the stable "idle" token.
-                if _is_interactive() and _is_true_first_run(fs):
+                if interactive and _is_true_first_run(fs):
                     print(_first_run_hint())
                     return 0
                 out = "idle"
-            if cfg.profiles:
-                out = "(multi) " + out
             print(out)
         return 0
     if args.cmd == "report":
@@ -1007,54 +1444,7 @@ def main(argv=None):
         if getattr(args, "json", False):
             print(json.dumps({"generated_at": now, "sections": sections}, indent=2))
             return 0
-        # text render
-        color = colors.color_enabled()
-        for sec in sections:
-            prof = sec.get("profile", "?")
-            by = sec.get("by", "day")
-            rows = sec.get("rows", [])
-            header = (
-                colors.violet(
-                    f"{prof} · {len([r for r in rows if r['label'] != 'TOTAL'])} {by}-ledger", color
-                )
-                if by != "day"
-                else colors.violet(f"{prof} · {getattr(args, 'days', 7)}-day ledger", color)
-            )
-            print(header)
-            # decide columns
-            show_pct = by == "day"
-            # header row
-            cols = ["DAY" if by == "day" else ("WEEK" if by == "week" else "MODEL"), "TOK", "COST"]
-            if show_pct:
-                cols.append("%CAP")
-            # widths rough
-            print("  ".join(cols))
-            print("  ".join(["-" * max(3, len(c)) for c in cols]))
-            for r in rows:
-                is_total = r["label"] == "TOTAL"
-                if is_total:
-                    print("  " + "-" * 30)
-                lab = r["label"]
-                tok = fmt_tokens(r["tokens"])
-                if r["cost"] is None:
-                    cst = "—"
-                else:
-                    cst = f"${r['cost']:,.2f}"
-                line = f"{lab:12}  {tok:>6}  {cst:>10}"
-                if show_pct:
-                    if r["pct_cap"] is not None:
-                        pct_str = colors.gauge(f"{r['pct_cap']:.0f}%", r["pct_cap"], color)
-                        line += f"  {pct_str}"
-                    else:
-                        line += "  —"
-                print(line)
-            # note if all unpriced
-            all_none = all(r["cost"] is None for r in rows if r["tokens"] > 0)
-            if all_none and any(r["tokens"] > 0 for r in rows):
-                print(colors.dim("cost unavailable (cost_mode=off or unpriced models)", color))
-            if not any(r["tokens"] > 0 for r in rows):
-                print(colors.dim(f"no usage data for {prof} in range", color))
-            print()
+        _render_report_text(sections, args, colors.color_enabled())
         return 0
     if args.cmd == "snapshot":
         fs = run_forecast(now, cfg)
