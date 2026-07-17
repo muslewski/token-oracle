@@ -6,24 +6,17 @@ Works for any configured source (claude_code, grok, generic). Use via
 in config; tmux users pipe via `oracle tmux` in status-right."""
 
 from ..cli import colors as c
-from ..core.timeutil import fmt_dh_long, fmt_reset, fmt_tokens
+from . import segments
 
 
-def _segment(f, enabled):
-    pct = f.projected_pct
-    prof = getattr(f, "profile", "default")
-    pre = f"{prof[0].upper()}: " if prof != "default" else ""
-    body = (
-        f"{pre}{fmt_reset(f.reset_in_secs)} {fmt_tokens(f.used)}/{fmt_tokens(f.cap)} →{round(pct)}%"
-    )
-    if f.eta_to_cap_secs is not None:
-        body += f" {c.M_WARN} cap {fmt_dh_long(f.eta_to_cap_secs)}"
-    return f"{c.violet('🕐', enabled)} {c.gauge(body, pct, enabled)}"
-
-
-def render(forecasts, color=None):
+def render(forecasts, color=None, budget=None):
+    """One ANSI line. ``budget`` degrades full→compact→minimal (adaptive HUD)."""
     enabled = c.pipe_color() if color is None else color
-    return "  ".join(_segment(f, enabled) for f in forecasts if not f.idle)
+    if budget is None:
+        budget = segments.cell_budget()
+    return segments.render_adaptive(
+        forecasts, budget=budget, encoding="ansi", color=enabled
+    )
 
 
 def cost_segment(usd, enabled):
