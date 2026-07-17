@@ -82,7 +82,12 @@ def test_doctor_exit_zero_with_events(tmp_path, monkeypatch):
     assert main(["doctor", "--config", cfg, "--now", str(now)]) == 0
 
 
-def test_statusline_runs(tmp_path, capsys):
+def test_statusline_runs(tmp_path, capsys, monkeypatch):
+    # Hermetic: real ~/.local/share/token-oracle/ratelimits.json must not
+    # flip the render into the header-headline path (used/cap tokens vanish).
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
+    monkeypatch.delenv("COLUMNS", raising=False)
+    monkeypatch.delenv("ORACLE_STATUS_WIDTH", raising=False)
     now = 100000.0
     cfg = _cfg(tmp_path, [[now - 100.0, 250]], now)
     assert main(["statusline", "--config", cfg, "--now", str(now)]) == 0

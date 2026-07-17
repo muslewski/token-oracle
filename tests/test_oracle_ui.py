@@ -146,7 +146,11 @@ def test_o2_forecast_hero_and_spark_on_tty(monkeypatch, tmp_path, capsys):
     assert spark_set & set(out), f"no sparkline glyphs in: {out!r}"
 
 
-def test_o2_forecast_json_byte_stable_shape(tmp_path, capsys):
+def test_o2_forecast_json_byte_stable_shape(tmp_path, capsys, monkeypatch):
+    # Hermetic: no host ratelimits/live/cache; no ambient COLUMNS width budget.
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.delenv("COLUMNS", raising=False)
+    monkeypatch.delenv("ORACLE_STATUS_WIDTH", raising=False)
     now = 100000.0
     cfg = _cfg(tmp_path, [[now - 100.0, 250]], now)
     rc = main(["forecast", "--json", "--config", cfg, "--now", str(now)])
@@ -324,7 +328,8 @@ def test_o5_report_columns_align(tmp_path, capsys, monkeypatch):
     assert spark_set & set(out), f"expected %CAP spark glyphs in:\n{out}"
 
 
-def test_o5_report_json_unchanged_shape(tmp_path, capsys):
+def test_o5_report_json_unchanged_shape(tmp_path, capsys, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
     now = 1_700_000_000.0
     cfg = _cfg(tmp_path, [[now - 100, 1234]], now)
     rc = main(["report", "--json", "--config", cfg, "--now", str(now)])
