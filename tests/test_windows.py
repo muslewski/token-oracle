@@ -120,3 +120,42 @@ def test_profile_prior_used_exactly():
     expected_pct = expected_projected / 100000 * 100
 
     assert f.projected_pct == pytest.approx(expected_pct)
+
+
+def test_recompute_with_used_rebases_projection():
+    from token_oracle.core.contracts import Forecast
+    from token_oracle.core.windows import recompute_with_used
+
+    # local: used 20%, end-proj 50% → residual 30% of cap
+    f = Forecast("weekly", used=200, cap=1000, projected_pct=50.0,
+                 eta_to_cap_secs=None, reset_in_secs=3600.0, idle=False, profile="claude")
+    # live says 90% now
+    g = recompute_with_used(f, used=900)
+    assert g.used == 900
+    # residual 300 tokens → end 1200 → 120%
+    assert abs(g.projected_pct - 120.0) < 0.01
+    assert g.eta_to_cap_secs is not None and g.eta_to_cap_secs > 0
+    # projected_pct is end-of-window, not current fill alias
+    assert g.projected_pct != 90.0
+
+
+def test_recompute_with_used_floors_at_live_fill():
+    from token_oracle.core.contracts import Forecast
+    from token_oracle.core.windows import recompute_with_used
+
+    # local end-proj undercounts badly (logs lag)
+    f = Forecast("weekly", used=100, cap=1000, projected_pct=20.0,
+                 eta_to_cap_secs=None, reset_in_secs=7200.0, idle=False)
+    g = recompute_with_used(f, used=990)  # live 99%
+    assert g.used == 990
+    # residual = max(0, 200-100)=100 → 990+100=1090 → 109%
+    assert g.projected_pct >= 99.0
+    assert abs(g.projected_pct - 109.0) < 0.01
+
+
+def test_recompute_idle_unchanged():
+    from token_oracle.core.contracts import Forecast
+    from token_oracle.core.windows import recompute_with_used
+
+    f = Forecast("5h", 0, 1000, 0.0, None, 18000.0, True)
+    assert recompute_with_used(f, 500) is f

@@ -240,3 +240,119 @@ def test_run_probe_headed_shares_display_across_providers(tmp_path, monkeypatch)
     # Snapshot has the results
     assert snap["providers"]["grok"]["state"] in ("ok", "rate_data_only")
     assert snap["providers"]["claude"]["state"] in ("ok", "rate_data_only")
+
+
+def test_partial_probe_keeps_unprobed_provider(tmp_path, monkeypatch):
+    """claude-only probe must not wipe prior grok readings from live.json."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    now = time.time()
+    from token_oracle.live.store import default_live_path, save_snapshot
+    from token_oracle.live.contract import CONF_HIGH, LiveReading, ProviderLive
+
+    save_snapshot(
+        {
+            "grok": ProviderLive(
+                provider="grok",
+                state="ok",
+                readings=[
+                    LiveReading(
+                        provider="grok",
+                        metric="weekly_pct",
+                        value=62.0,
+                        confidence=CONF_HIGH,
+                        extractor="grok.test",
+                        evidence="ev",
+                        fetched_at=now,
+                    )
+                ],
+                fetched_at=now,
+            ),
+            "claude": ProviderLive(
+                provider="claude",
+                state="ok",
+                readings=[
+                    LiveReading(
+                        provider="claude",
+                        metric="weekly_pct",
+                        value=90.0,
+                        confidence=CONF_HIGH,
+                        extractor="claude.test",
+                        evidence="ev",
+                        fetched_at=now - 60,
+                    )
+                ],
+                fetched_at=now - 60,
+            ),
+        }
+    )
+
+    import token_oracle.live.probe as probe_mod
+
+    def claude_challenge(**kwargs):
+        return ProviderLive(
+            provider="claude",
+            state="authenticated_no_data",
+            readings=[],
+            fetched_at=time.time(),
+            note="blocked by bot challenge (title=Just a moment...)",
+        )
+
+    def must_not_probe_grok(**kwargs):
+        raise AssertionError("grok must not be fetched on claude-only probe")
+
+    monkeypatch.setattr(probe_mod, "fetch_claude_live_usage", claude_challenge)
+    monkeypatch.setattr(probe_mod, "fetch_grok_live_usage", must_not_probe_grok)
+
+    snap = run_probe(providers=("claude",), headless=True, progress=None)
+    assert "grok" in snap["providers"]
+    assert snap["providers"]["grok"]["state"] == "ok"
+    assert snap["providers"]["grok"]["readings"][0]["value"] == 62.0
+    # last-good claude retained
+    cl = snap["providers"]["claude"]
+    assert cl["state"] == "ok"
+    assert cl["readings"][0]["value"] == 90.0
+    assert cl["readings"][0]["extractor"].endswith("+retained")
+    assert "retained last-good" in (cl.get("note") or "")
+    assert "bot challenge" in (cl.get("note") or "")
+
+
+def test_merge_retains_last_good_direct():
+    from token_oracle.live.store import merge_with_previous
+    from token_oracle.live.contract import CONF_HIGH, LiveReading, ProviderLive
+
+    now = 1_000_000.0
+    prev = {
+        "providers": {
+            "claude": {
+                "provider": "claude",
+                "state": "ok",
+                "readings": [
+                    {
+                        "provider": "claude",
+                        "metric": "weekly_pct",
+                        "value": 88.0,
+                        "confidence": CONF_HIGH,
+                        "extractor": "claude.row",
+                        "evidence": "e",
+                        "fetched_at": now - 100,
+                        "model": None,
+                    }
+                ],
+                "fetched_at": now - 100,
+                "error": None,
+                "note": "",
+            }
+        }
+    }
+    new = {
+        "claude": ProviderLive(
+            provider="claude",
+            state="authenticated_no_data",
+            readings=[],
+            fetched_at=now,
+            note="blocked by bot challenge",
+        )
+    }
+    out = merge_with_previous(new, prev, now=now, probed={"claude"})
+    assert out["claude"].readings[0].value == 88.0
+    assert out["claude"].readings[0].extractor.endswith("+retained")

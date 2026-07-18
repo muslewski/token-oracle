@@ -7,7 +7,7 @@ from . import events as events_mod
 from .cache import AGGREGATE_INTERVAL, load_cache, save_cache
 from .config import load_config, try_get_claude_five_hour_data, try_get_claude_five_hour_remaining
 from .profile import HIST_SECS, build_profile
-from .windows import compute_window
+from .windows import compute_window, recompute_with_used
 
 
 def _get_profile_config(cfg, pname, pdef):
@@ -100,9 +100,11 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
             if data:
                 if data.get("reset_in_secs") is not None:
                     object.__setattr__(f, "reset_in_secs", data["reset_in_secs"])
-                # Server current fill → used only (never projected_pct).
+                # Server current fill → used, then recompute end-proj + ETA so
+                # predictions (not only statusline k/cap) track server truth.
                 if data.get("projected_pct") is not None and data.get("source") == "server":
-                    object.__setattr__(f, "used", int(round(data["projected_pct"] / 100.0 * w.cap)))
+                    live_used = int(round(data["projected_pct"] / 100.0 * w.cap))
+                    f = recompute_with_used(f, live_used)
             else:
                 claude_rem = try_get_claude_five_hour_remaining(now)
                 if claude_rem is not None and claude_rem > 0:
@@ -145,7 +147,7 @@ def forecast(now, config=None):
             if changed:
                 cache["lastAggregate"] = now
                 save_cache(cache, cfg.cache_path)
-            return results
+            return _apply_live_fills(results, now)
         else:
             # legacy single path (exact previous behavior)
             from ..sources.base import get_source
@@ -179,11 +181,10 @@ def forecast(now, config=None):
                     if data:
                         if data.get("reset_in_secs") is not None:
                             object.__setattr__(f, "reset_in_secs", data["reset_in_secs"])
-                        # Server current fill → used only (never projected_pct).
+                        # Server current fill → used + recompute end-proj/ETA.
                         if data.get("projected_pct") is not None and data.get("source") == "server":
-                            object.__setattr__(
-                                f, "used", int(round(data["projected_pct"] / 100.0 * w.cap))
-                            )
+                            live_used = int(round(data["projected_pct"] / 100.0 * w.cap))
+                            f = recompute_with_used(f, live_used)
                     else:
                         claude_rem = try_get_claude_five_hour_remaining(now)
                         if claude_rem is not None and claude_rem > 0:
@@ -192,9 +193,22 @@ def forecast(now, config=None):
 
             for f in fs:
                 object.__setattr__(f, "profile", "default")
-            return fs
+            return _apply_live_fills(fs, now)
     except Exception:
         return []
+
+
+def _apply_live_fills(forecasts, now):
+    """Best-effort: re-base used/end-proj/eta on live.json + header fills.
+
+    Isolated so a broken live store never blanks forecasts. No browser I/O.
+    """
+    try:
+        from ..live.fill import apply_live_fills
+
+        return apply_live_fills(forecasts, now)
+    except Exception:
+        return forecasts
 
 
 def multi_forecast(now, config=None):

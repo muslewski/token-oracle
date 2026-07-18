@@ -8,7 +8,7 @@ import os
 import time
 
 from .contract import STATE_ERROR, STATE_UNAVAILABLE, ProviderLive, provider_live_to_dict
-from .store import save_snapshot
+from .store import load_snapshot, merge_with_previous, save_snapshot
 from .web import fetch_claude_live_usage, fetch_grok_live_usage, virtual_display
 
 
@@ -19,6 +19,9 @@ def run_probe(
     return the snapshot dict. Per-provider exceptions become
     ProviderLive(state=STATE_ERROR, error=str(e)[:200]) — one provider
     failing must not lose the other's data.
+
+    Before write: merge_with_previous so (1) partial probes keep unprobed
+    providers and (2) empty bot-challenge results retain last-good readings.
     """
     if os.environ.get("TOKEN_ORACLE_LIVE_HEADED") == "1":
         headless = False
@@ -31,6 +34,7 @@ def run_probe(
         prov_list = [p.lower() for p in providers]
 
     snap_providers: dict[str, ProviderLive] = {}
+    probed: set[str] = set()
 
     display_ok = True
     cm = virtual_display(progress) if not headless else contextlib.nullcontext(True)
@@ -40,6 +44,7 @@ def run_probe(
         for name in prov_list:
             if name not in ("grok", "claude"):
                 continue
+            probed.add(name)
             if progress:
                 try:
                     progress(f"   • probing {name} ...")
@@ -97,8 +102,9 @@ def run_probe(
                     error=str(e)[:200],
                 )
 
-    # Always attempt the atomic write; return the dict regardless of I/O outcome.
-    # (Display is torn down before snapshot write.)
+    # Merge last-good / unprobed providers, then atomic write.
+    prev = load_snapshot(path)
+    snap_providers = merge_with_previous(snap_providers, prev, probed=probed)
     save_snapshot(snap_providers, path)
 
     snap_dict = {

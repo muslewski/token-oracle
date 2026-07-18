@@ -22,6 +22,45 @@ def eta_to_cap(used, projected_pct, time_left, cap):
     return (cap - used) / rate
 
 
+def recompute_with_used(f: Forecast, used: int) -> Forecast:
+    """Re-base an existing Forecast on an authoritative *current* fill (live /
+    server header).
+
+    Keeps the residual burn implied by the local model
+    (``projected_tokens - old_used``) and attaches it to the new ``used``.
+    Never writes current-fill % into ``projected_pct`` — that field stays
+    end-of-window projection (plan 030). Idle forecasts are left unchanged.
+    """
+    if f is None or getattr(f, "idle", False):
+        return f
+    cap = int(getattr(f, "cap", 0) or 0)
+    if cap <= 0:
+        return f
+    used = max(0, int(used))
+    old_used = int(getattr(f, "used", 0) or 0)
+    old_proj_tok = float(getattr(f, "projected_pct", 0.0) or 0.0) / 100.0 * cap
+    # Tokens the local model still expected to burn before reset (can be 0 if
+    # logs already lag behind their own end-proj).
+    residual = max(0.0, old_proj_tok - old_used)
+    projected_tok = used + residual
+    # Floor: never project *below* authoritative now-fill.
+    projected_tok = max(projected_tok, float(used))
+    projected_pct = projected_tok / cap * 100.0
+    reset_in = float(getattr(f, "reset_in_secs", 0.0) or 0.0)
+    eta = eta_to_cap(used, projected_pct, reset_in, cap)
+    return Forecast(
+        window=f.window,
+        used=used,
+        cap=cap,
+        projected_pct=projected_pct,
+        eta_to_cap_secs=eta,
+        reset_in_secs=reset_in,
+        idle=False,
+        confidence=float(getattr(f, "confidence", 1.0) or 1.0),
+        profile=getattr(f, "profile", "default") or "default",
+    )
+
+
 def _bounds(events, now, window):
     """Return (start, reset) of the current window, or None if rolling and
     idle/expired."""

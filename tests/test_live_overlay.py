@@ -13,7 +13,7 @@ from token_oracle.live.contract import (
     LiveReading,
     ProviderLive,
 )
-from token_oracle.live.overlay import FRESH_TTL_SECS, overlay_cells
+from token_oracle.live.overlay import FRESH_TTL_SECS, HEADER_FRESH_TTL_SECS, overlay_cells
 
 
 def test_overlay_high_conf_fresh_sets_pct():
@@ -318,12 +318,23 @@ def test_stale_header_weekly_withheld():
 
 def test_old_header_weekly_withheld_by_ttl():
     now = time.time()
-    old_obs = now - (FRESH_TTL_SECS + 60)
+    old_obs = now - (HEADER_FRESH_TTL_SECS + 60)
     hdr = {"used_percentage": 40.0, "observed_at": old_obs, "stale": False}
     fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
     cells = overlay_cells(fs, {"providers": {}}, now, weekly_header=hdr)
-    # age > ttl => withheld
+    # age > header TTL => withheld
     assert cells.get(("claude", "weekly")) is None
+
+
+def test_header_weekly_fresh_within_multi_hour_ttl():
+    """Statusline may idle for hours; weekly header still applies within 6h."""
+    now = time.time()
+    mid_obs = now - (FRESH_TTL_SECS + 120)  # older than web TTL, under header TTL
+    hdr = {"used_percentage": 93.0, "observed_at": mid_obs, "stale": False}
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
+    cells = overlay_cells(fs, {"providers": {}}, now, weekly_header=hdr)
+    assert cells.get(("claude", "weekly")) is not None
+    assert cells[("claude", "weekly")].pct == 93.0
 
 
 def test_grok_weekly_untouched_by_header():
