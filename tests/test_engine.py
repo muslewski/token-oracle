@@ -288,8 +288,10 @@ def test_single_path_scan_failure_falls_back_to_cached_events(monkeypatch, tmp_p
     assert five.used >= 5000
 
 
-def test_server_5h_does_not_overwrite_projected_pct(monkeypatch, tmp_path):
-    """Server current fill updates used + rebases end-proj; never aliases projected_pct=current (plan 030)."""
+def test_server_5h_anchors_used_and_projects_flat(monkeypatch, tmp_path):
+    """5h anchors used to the server % and projects FLAT: the local 5h token
+    count is raw tokens while the server % is a weighted rate-limit measure
+    (different scales), so no speculative end-proj/ETA is derived (plan 063)."""
     import token_oracle.core.engine as ENG
 
     local_proj = 42.0
@@ -333,10 +335,8 @@ def test_server_5h_does_not_overwrite_projected_pct(monkeypatch, tmp_path):
     assert len(fs) == 1
     f = fs[0]
     live_used = int(round(77.0 / 100.0 * cap))
-    residual = local_proj / 100.0 * cap - local_used
-    expect_pct = (live_used + residual) / cap * 100.0
     assert f.used == live_used
     assert f.reset_in_secs == 3600.0
-    # end-of-window projection, NOT current-fill alias
-    assert f.projected_pct != 77.0
-    assert abs(f.projected_pct - expect_pct) < 0.01
+    # flat off server truth: end-proj == now%, no wrong-scale extrapolation, no ETA
+    assert abs(f.projected_pct - 77.0) < 0.01
+    assert f.eta_to_cap_secs is None

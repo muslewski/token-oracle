@@ -10,14 +10,19 @@ from .profile import HIST_SECS, profile_integral
 # Slack on the observed burn when bounding an end-of-window projection: only a
 # history-driven blend that exceeds this multiple of the measured burn is
 # clamped (plan 063, I2). >1 so a normal prior≈measured blend is never touched.
-PROJ_BOUND_SLACK = 2.0
+PROJ_BOUND_SLACK = 1.5
+# A burst is never extrapolated as a rate over less than this span, so a
+# few-second flurry early in a rolling window can't imply a runaway pace.
+RATE_SPAN_FLOOR = 1800.0
 
 
 def observed_rate(events, start, now, rate_window_secs=3600.0):
-    """Tokens/sec burned over the recent trailing window [max(start, now-W), now].
+    """Tokens/sec burned in the recent IN-WINDOW span [max(start, now-W), now].
 
-    A *measured* rate (not a projection-implied one), used to bound the
-    projection + ETA by real recent burn. None when no burn is observed.
+    A *measured* rate (not a projection-implied one), consistent with the
+    window's own ``used`` (only events at/after ``start`` count), and floored to
+    RATE_SPAN_FLOOR so a few-second burst is not read as a sustained pace.
+    None when no burn is observed.
     """
     lo = max(float(start), float(now) - float(rate_window_secs))
     total = 0
@@ -29,9 +34,9 @@ def observed_rate(events, start, now, rate_window_secs=3600.0):
             continue
         if lo <= ts <= now:
             total += tok
-    span = now - lo
-    if span <= 0 or total <= 0:
+    if total <= 0:
         return None
+    span = max(now - lo, RATE_SPAN_FLOOR)
     return total / span
 
 
@@ -171,16 +176,17 @@ def compute_window(events, now, window, profile=None):
     else:
         prior_term = profile_integral(profile, now, reset)
     projected = used + (1.0 - f) * prior_term + f * measured_term
-    # Bound the history-driven blend by the observed burn so an atypical early
-    # burst (heavy prior_term at f≈0) can't project many-hundred-% (plan 063,
-    # I2). Only a blend beyond PROJ_BOUND_SLACK× the measured burn is clamped;
-    # a normal prior≈measured blend is untouched.
-    observed_bound = used + PROJ_BOUND_SLACK * measured_term
+    reset_in = reset - now
+    # Bound the history-driven blend by the window's OWN average burn (used over
+    # its elapsed span, floored so a fresh-window burst is not read as a runaway
+    # pace) so an atypical burst or heavy history can't project many-hundred-%
+    # (plan 063, I2). A blend within PROJ_BOUND_SLACK× that burn is untouched;
+    # only runaway projections are clamped. This rate is consistent with `used`.
+    obs_rate = (used / max(elapsed, RATE_SPAN_FLOOR)) if used > 0 else None
+    observed_bound = used + (obs_rate or 0.0) * max(0.0, reset_in) * PROJ_BOUND_SLACK
     projected = max(float(used), min(projected, observed_bound))
     projected_pct = (projected / cap * 100) if cap else 0.0
-    reset_in = reset - now
-    # ETA from the OBSERVED trailing burn, not the (now-bounded) projection rate.
-    obs_rate = observed_rate(pairs_all, start, now)
+    # ETA from the OBSERVED burn, not the (now-bounded) projection rate.
     eta = eta_to_cap(used, cap, obs_rate, projected_pct)
     return Forecast(
         window.name, int(used), cap, projected_pct, eta, float(reset_in), False, obs_rate=obs_rate
