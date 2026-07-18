@@ -228,10 +228,18 @@ def merge_readings(readings: list[LiveReading]) -> list[LiveReading]:
     return list(final_seen.values())
 
 
+# A single-extractor weekly increase larger than this (points) with no second
+# corroborating reading near the same value is a likely misparse (decoy meter,
+# wrong row) — held at prior confidence rather than adopted (plan 063 I4).
+UPWARD_JUMP_PTS = 40.0
+UPWARD_CORROB_TOL = 5.0  # a second reading within this many points corroborates
+
+
 def monotonic_guard(
     readings: list[LiveReading], previous_snapshot: dict | None, now: float, provider: str = "grok"
 ) -> list[LiveReading]:
-    """Downgrade unexplained drops in weekly usage (and per-model weekly).
+    """Downgrade unexplained drops in weekly usage (and per-model weekly), and
+    hold uncorroborated upward spikes.
 
     Keyed by (metric, model) so METRIC_MODEL_WEEKLY_PCT for "fable" is
     independent of the bare METRIC_WEEKLY_PCT. Reset is subscription-global.
@@ -287,7 +295,8 @@ def monotonic_guard(
             pval = prev_by_key.get((r.metric, r.model))
             if pval is not None:
                 try:
-                    delta = pval - float(r.value)
+                    rval = float(r.value)
+                    delta = pval - rval
                     if delta > 2.0 and not reset_happened:
                         ev = r.evidence
                         if "; dropped from" not in ev:
@@ -305,6 +314,37 @@ def monotonic_guard(
                             )
                         )
                         continue
+                    # Symmetric upward guard: a large jump needs a second
+                    # corroborating reading (same metric+model, near value) or it
+                    # is held at prior confidence — a lone spike is likely a
+                    # misparse. Self-heals: the held value is what next cycle
+                    # compares against, so a real sustained jump adopts then.
+                    if (rval - pval) > UPWARD_JUMP_PTS and not reset_happened:
+                        near = [
+                            o
+                            for o in readings
+                            if o.metric == r.metric
+                            and getattr(o, "model", None) == r.model
+                            and o.value is not None
+                            and abs(float(o.value) - rval) <= UPWARD_CORROB_TOL
+                        ]
+                        if len(near) < 2:
+                            ev = r.evidence
+                            if "; unexplained jump from" not in ev:
+                                ev = ev + f"; unexplained jump from {pval} (uncorroborated)"
+                            out.append(
+                                LiveReading(
+                                    provider=r.provider,
+                                    metric=r.metric,
+                                    value=r.value,
+                                    confidence=CONF_LOW,
+                                    extractor=r.extractor,
+                                    evidence=_truncate_evidence(ev),
+                                    fetched_at=r.fetched_at,
+                                    model=r.model,
+                                )
+                            )
+                            continue
                 except Exception:
                     pass
         out.append(r)

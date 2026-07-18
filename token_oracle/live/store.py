@@ -20,6 +20,7 @@ for a bounded window so the dash does not blank weekly/fable on every CF fail.
 
 import json
 import os
+import re
 import tempfile
 import time
 
@@ -28,6 +29,7 @@ from .contract import (
     METRIC_FIVE_HOUR_PCT,
     METRIC_MODEL_WEEKLY_PCT,
     METRIC_WEEKLY_PCT,
+    STATE_STALE,
     ProviderLive,
     provider_live_from_dict,
     provider_live_to_dict,
@@ -36,6 +38,20 @@ from .contract import (
 # How long last-good usage readings may be kept when a probe fails empty
 # (Cloudflare challenge, auth_no_data, transient error). Weekly caps move slowly.
 RETAIN_MAX_AGE_SECS = 6 * 3600.0
+
+# After this many consecutive retained (probe-failing) cycles a provider is
+# escalated from a silent last-good hold to a visible 'stale — probe failing'
+# state, so the dash/doctor stop showing hours-old numbers as if live (plan 063 I4).
+RETAIN_MAX_CYCLES = 6
+
+_RETAIN_CYCLE_RE = re.compile(r"retain#(\d+)")
+
+
+def _retain_count(pl: ProviderLive) -> int:
+    """Consecutive retained-cycle count previously stamped into the note (0 if none)."""
+    m = _RETAIN_CYCLE_RE.search(getattr(pl, "note", "") or "")
+    return int(m.group(1)) if m else 0
+
 
 _USAGE_METRICS = frozenset({METRIC_WEEKLY_PCT, METRIC_MODEL_WEEKLY_PCT, METRIC_FIVE_HOUR_PCT})
 
@@ -77,8 +93,13 @@ def _reading_age(pl: ProviderLive, now: float) -> float | None:
     return max(0.0, now - newest)
 
 
-def _tag_retained(pl: ProviderLive, fail_note: str) -> ProviderLive:
-    """Copy last-good provider; mark extractors + note so UI can show provenance."""
+def _tag_retained(pl: ProviderLive, fail_note: str, cycle: int = 1) -> ProviderLive:
+    """Copy last-good provider; mark extractors + note so UI can show provenance.
+
+    cycle counts consecutive retained probes. Once it exceeds RETAIN_MAX_CYCLES
+    the provider is escalated to STATE_STALE (visible 'probe failing') instead of
+    silently keeping its state so hours-old numbers stop reading as live.
+    """
     from .contract import LiveReading
 
     tagged = []
@@ -98,16 +119,23 @@ def _tag_retained(pl: ProviderLive, fail_note: str) -> ProviderLive:
                 model=r.model,
             )
         )
-    note = (pl.note or "").strip()
+    # Drop any prior retain# marker so the counter does not accumulate stale bits.
+    note = _RETAIN_CYCLE_RE.sub("", pl.note or "").replace("  ", " ").strip(" ;").strip()
     fail = (fail_note or "").strip()
     retain_bit = "retained last-good"
     if fail:
         retain_bit = f"{retain_bit} · probe: {fail[:120]}"
     if retain_bit not in note:
         note = f"{note}; {retain_bit}".strip("; ").strip() if note else retain_bit
+    note = f"{note}; retain#{cycle}".strip("; ").strip()
+    escalated = cycle > RETAIN_MAX_CYCLES
+    if escalated and "probe failing" not in note:
+        note = f"{note}; probe failing".strip("; ").strip()
     return ProviderLive(
         provider=pl.provider,
-        state=pl.state,  # keep prior ok so cells still apply
+        # keep prior state (ok) so cells still apply — until the retain streak
+        # exceeds the cap, then surface it as stale.
+        state=STATE_STALE if escalated else pl.state,
         readings=tagged,
         fetched_at=pl.fetched_at,
         error=None,
@@ -167,7 +195,8 @@ def merge_with_previous(
         if age is None or age > retain_max_age:
             continue
         fail_note = (cur.note or cur.error or cur.state or "").strip()
-        out[name] = _tag_retained(old, fail_note)
+        cycle = _retain_count(old) + 1
+        out[name] = _tag_retained(old, fail_note, cycle)
 
     return out
 

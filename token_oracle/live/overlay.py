@@ -44,6 +44,18 @@ RETAIN_FRESH_TTL_SECS = 6 * 3600.0
 HEADER_FRESH_TTL_SECS = 6 * 3600.0
 
 
+def _retained_flag(extractor: str, age_secs: float | None) -> bool:
+    """Honest-provenance (plan 063, I4): a cell is 'retained' — displayed but not
+    freshly probed — when it came from a last-good '+retained' reading OR its age
+    exceeds the math-freshness bar FRESH_TTL_SECS. Such a cell is still shown
+    (state stays OK for slow-moving caps) but callers can render its age instead
+    of a bare 'live'.
+    """
+    if isinstance(extractor, str) and extractor.endswith("+retained"):
+        return True
+    return age_secs is not None and age_secs > FRESH_TTL_SECS
+
+
 @dataclass(frozen=True)
 class LiveCell:
     """Resolved live overlay for one (profile, window) slot.
@@ -51,6 +63,7 @@ class LiveCell:
     pct is set ONLY for high-confidence fresh readings.
     state reflects provider state or STATE_STALE.
     state_value carries e.g. "starts_on_first_message" for special 5h handling.
+    is_retained flags a display-only last-good / over-fresh cell (plan 063 I4).
     """
 
     pct: float | None  # applied live percentage, or None
@@ -59,6 +72,7 @@ class LiveCell:
     evidence: str = ""
     extractor: str = ""
     state_value: str | None = None
+    is_retained: bool = False
 
 
 def _canon(p: str) -> str:
@@ -128,6 +142,7 @@ def overlay_cells(
                 evidence=ev,
                 extractor=ex,
                 state_value=state_val,
+                is_retained=_retained_flag(ex, rage),
             )
 
             if metric == METRIC_WEEKLY_PCT:
@@ -144,13 +159,16 @@ def overlay_cells(
                 if existing:
                     # prefer a pct if present from five_hour_pct reading
                     merged_pct = existing.pct if existing.pct is not None else pct
+                    merged_ex = existing.extractor or ex
+                    merged_age = existing.age_secs if existing.age_secs is not None else rage
                     cells[(p_c, "5h")] = LiveCell(
                         pct=merged_pct,
                         state=existing.state if existing.state != STATE_STALE else cstate,
-                        age_secs=existing.age_secs if existing.age_secs is not None else rage,
+                        age_secs=merged_age,
                         evidence=existing.evidence or ev,
-                        extractor=existing.extractor or ex,
+                        extractor=merged_ex,
                         state_value=state_val,
+                        is_retained=existing.is_retained or _retained_flag(merged_ex, merged_age),
                     )
                 else:
                     cells[(p_c, "5h")] = cell
@@ -175,6 +193,7 @@ def overlay_cells(
                 evidence="claude rate-limit header (seven_day)",
                 extractor="header",
                 state_value=None,
+                is_retained=_retained_flag("header", age),
             )
 
     return cells

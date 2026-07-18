@@ -244,6 +244,106 @@ def test_reading_at_full_probe_interval_still_applied():
     assert cell.state != STATE_STALE
 
 
+# --- honest-provenance retained flag tests (plan 063 I4) ---
+
+
+def test_retained_cell_is_flagged():
+    """A cell built from a '+retained' last-good reading is display-only:
+    still shown (weekly caps move slowly) but flagged is_retained."""
+    now = time.time()
+    snap = {
+        "version": 1,
+        "written_at": now,
+        "providers": {
+            "grok": {
+                "provider": "grok",
+                "state": "ok",
+                "readings": [
+                    {
+                        "provider": "grok",
+                        "metric": METRIC_WEEKLY_PCT,
+                        "value": 23.0,
+                        "confidence": CONF_HIGH,
+                        "extractor": "grok.usage_modal.text+retained",
+                        "evidence": "Weekly Heavy Limit 23% used",
+                        "fetched_at": now - 1200,  # > FRESH_TTL, < 6h retain TTL
+                    }
+                ],
+            }
+        },
+    }
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="grok")]
+    cell = overlay_cells(fs, snap, now, weekly_header=None).get(("grok", "weekly"))
+    assert cell is not None
+    assert cell.pct == 23.0  # retained weekly still applied
+    assert cell.state == STATE_OK
+    assert cell.is_retained is True
+
+
+def test_fresh_cell_not_flagged():
+    now = time.time()
+    snap = {
+        "version": 1,
+        "written_at": now,
+        "providers": {
+            "claude": {
+                "provider": "claude",
+                "state": "ok",
+                "readings": [
+                    {
+                        "provider": "claude",
+                        "metric": METRIC_WEEKLY_PCT,
+                        "value": 38.0,
+                        "confidence": CONF_HIGH,
+                        "extractor": "claude.ex",
+                        "evidence": "row42",
+                        "fetched_at": now,
+                    }
+                ],
+            }
+        },
+    }
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="claude")]
+    cell = overlay_cells(fs, snap, now, weekly_header=None).get(("claude", "weekly"))
+    assert cell is not None
+    assert cell.pct == 38.0
+    assert cell.is_retained is False
+
+
+def test_over_fresh_cell_is_flagged():
+    """Even a non-retained reading older than FRESH_TTL_SECS reads as retained."""
+    now = time.time()
+    snap = {
+        "version": 1,
+        "written_at": now,
+        "providers": {
+            "grok": {
+                "provider": "grok",
+                "state": "ok",
+                "readings": [
+                    {
+                        "provider": "grok",
+                        "metric": METRIC_WEEKLY_PCT,
+                        "value": 50.0,
+                        "confidence": CONF_HIGH,
+                        "extractor": "grok.modal",
+                        "evidence": "50% used",
+                        "fetched_at": now - (FRESH_TTL_SECS + 30),
+                    }
+                ],
+            }
+        },
+    }
+    fs = [Forecast("weekly", 100, 1000, 40.0, None, 100.0, False, profile="grok")]
+    # give a generous ttl so it is not withheld as stale; only test the flag
+    cell = overlay_cells(
+        fs, snap, now, ttl=FRESH_TTL_SECS + 600, weekly_header=None
+    ).get(("grok", "weekly"))
+    assert cell is not None
+    assert cell.pct == 50.0
+    assert cell.is_retained is True
+
+
 # --- header weekly (self-ingested rate limit) tests (plan 054) ---
 
 
