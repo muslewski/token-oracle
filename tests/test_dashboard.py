@@ -26,6 +26,7 @@ from token_oracle.dashboard.future import (
     render_future,
     spark_next24,
 )
+from token_oracle.dashboard.past import render_past, short_model, top_models_by_day
 from token_oracle.dashboard.race import (
     Truth,
     eta_for_race,
@@ -34,7 +35,6 @@ from token_oracle.dashboard.race import (
     race_status,
     window_truth,
 )
-from token_oracle.dashboard.past import render_past, short_model, top_models_by_day
 from token_oracle.dashboard.skeleton import render_skeleton, render_stale_banner, spinner_char
 from token_oracle.dashboard.store import DashStore
 from token_oracle.live.contract import STATE_OK
@@ -756,9 +756,7 @@ def test_margin_line_variants():
     assert "clear by" in margin_line(
         _race_truth(now_pct=50.0, end_pct=110.0, reset_in=3600.0), 7200.0
     )
-    assert "headroom" in margin_line(
-        _race_truth(now_pct=40.0, end_pct=50.0, reset_in=3600.0), None
-    )
+    assert "headroom" in margin_line(_race_truth(now_pct=40.0, end_pct=50.0, reset_in=3600.0), None)
 
 
 def test_render_future_live_disagree_shows_both():
@@ -840,3 +838,70 @@ def test_render_past_explains_spend():
     text = "\n".join(render_past(rows, 120, False, show_cost=True))
     assert "spent" in text.lower() or "spend" in text.lower()
     assert "subscription" in text.lower() or "API" in text
+
+
+# --- plan 064: Future/Past honesty ---
+def test_064_no_impossible_hit_caption():
+    from token_oracle.core.contracts import Forecast
+    from token_oracle.dashboard.future import render_future
+    from token_oracle.live.contract import STATE_OK
+    from token_oracle.live.overlay import LiveCell
+
+    # live 50%, local end-proj 90% (< 100 → never hits cap) must NOT show "hit in ..."
+    fs = [Forecast("weekly", 500, 1000, 90.0, None, 3600.0, False, profile="claude")]
+    cells = {("claude", "weekly"): LiveCell(pct=50.0, state=STATE_OK, age_secs=5.0)}
+    text = "\n".join(render_future(fs, None, 0.0, 100, False, cells=cells))
+    assert "hit in" not in text
+    assert "no cap hit projected" in text
+
+
+def test_064_live_now_high_not_reassured():
+    from token_oracle.core.contracts import Forecast
+    from token_oracle.dashboard.future import render_future
+    from token_oracle.live.contract import STATE_OK
+    from token_oracle.live.overlay import LiveCell
+
+    # live 99% while local end-proj lags at 23% — must not reassure "no hit before reset"
+    fs = [Forecast("weekly", 100, 1000, 23.0, None, 3600.0, False, profile="claude")]
+    cells = {("claude", "weekly"): LiveCell(pct=99.0, state=STATE_OK, age_secs=3.0)}
+    text = "\n".join(render_future(fs, None, 0.0, 100, False, cells=cells))
+    assert "99%" in text
+    assert "no hit before reset" not in text
+    assert "99% now" in text  # factual, near-the-wall caption
+
+
+def test_064_future_shows_retained_age_like_present():
+    from token_oracle.core.contracts import Forecast
+    from token_oracle.dashboard.future import render_future
+    from token_oracle.live.contract import STATE_OK
+    from token_oracle.live.overlay import LiveCell
+
+    fs = [Forecast("fable", 100, 1000, 23.0, None, 3600.0, False, profile="claude")]
+    cells = {
+        ("claude", "fable"): LiveCell(
+            pct=48.0, state=STATE_OK, age_secs=7200.0, extractor="modal+retained"
+        )
+    }
+    text = "\n".join(render_future(fs, None, 0.0, 100, False, cells=cells))
+    assert "48%" in text
+    assert "retained" in text and "~2h ago" in text
+    assert "live now   48%" not in text  # a retained cell is not fresh "live now"
+
+
+def test_064_spark_flat_profile_not_all_full():
+    from token_oracle.dashboard.future import spark_next24
+
+    spark, _total = spark_next24([1.0] * 168, 0.0)
+    assert spark.count("█") < 24  # flat burn is a steady band, not a solid wall
+
+
+def test_064_past_total_not_bare_pct():
+    from token_oracle.core.report import LedgerRow
+    from token_oracle.dashboard.past import render_past
+
+    rows = [
+        LedgerRow(label="2026-07-01", tokens=5_000_000, cost=1.0, unpriced_tokens=0, pct_cap=62.5),
+        LedgerRow(label="TOTAL", tokens=24_000_000, cost=5.0, unpriced_tokens=0, pct_cap=300.0),
+    ]
+    text = "\n".join(render_past(rows, 100, False))
+    assert "3.0×wk" in text  # 14-day sum shown as a multiple of a week, not "300%"

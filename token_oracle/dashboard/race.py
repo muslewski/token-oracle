@@ -25,6 +25,9 @@ class Truth:
     window: str
     cap: int
     profile: str
+    # Provenance of a live now_pct so Future reads the same as Present (plan 064, I4).
+    age_secs: float | None = None
+    is_retained: bool = False
 
 
 def profile_canon(name: str) -> str:
@@ -57,6 +60,8 @@ def window_truth(f, cells=None) -> Truth:
 
     now_pct: float | None = None
     source = "none"
+    age_secs: float | None = None
+    is_retained = False
 
     if kind == "5h":
         if cap > 0:
@@ -70,6 +75,11 @@ def window_truth(f, cells=None) -> Truth:
         if cell is not None and getattr(cell, "pct", None) is not None:
             now_pct = float(cell.pct)
             source = "live"
+            age_secs = getattr(cell, "age_secs", None)
+            ex = getattr(cell, "extractor", "") or ""
+            is_retained = bool(getattr(cell, "is_retained", False)) or (
+                isinstance(ex, str) and ex.endswith("+retained")
+            )
         elif cap > 0 and not idle:
             now_pct = 100.0 * used / cap
             source = "local"
@@ -93,27 +103,41 @@ def window_truth(f, cells=None) -> Truth:
         window=ww,
         cap=cap,
         profile=pname,
+        age_secs=age_secs,
+        is_retained=is_retained,
     )
 
 
 def eta_for_race(f, truth: Truth) -> float | None:
-    """Live-aware seconds-to-cap for the race clock."""
+    """Live-aware seconds-to-cap for the race clock.
+
+    Returns a value ONLY when the cap is actually hit before reset. A window
+    that projects below 100% never hits the cap → None (kills the "hit in
+    1.25×reset" impossible forecast, plan 064). A value is always < reset_in,
+    so caption and margin never contradict.
+    """
     now_pct = truth.now_pct
     if now_pct is not None and now_pct >= 100.0:
         return 0.0
-    engine_eta = getattr(f, "eta_to_cap_secs", None)
-    if truth.source == "live" and now_pct is not None and truth.cap > 0:
+    end_pct = truth.end_pct
+    reset_in = truth.reset_in
+    # Projection never reaches the cap → no hit.
+    if end_pct is None or end_pct < 100.0:
+        return None
+    if truth.source == "live" and now_pct is not None and truth.cap > 0 and reset_in > 0:
         live_used = (now_pct / 100.0) * truth.cap
-        end_pct = truth.end_pct if truth.end_pct is not None else now_pct
-        reset_in = truth.reset_in
-        if end_pct > now_pct and reset_in > 0:
-            remaining_tokens = (end_pct / 100.0) * truth.cap - live_used
-            rate = remaining_tokens / reset_in
-            if rate > 0:
-                return (truth.cap - live_used) / rate
+        remaining_tokens = (end_pct / 100.0) * truth.cap - live_used
+        if remaining_tokens <= 0:
             return None
-        return float(engine_eta) if engine_eta is not None else None
-    return float(engine_eta) if engine_eta is not None else None
+        rate = remaining_tokens / reset_in
+        if rate <= 0:
+            return None
+        eta = (truth.cap - live_used) / rate
+        return eta if eta <= reset_in else None
+    engine_eta = getattr(f, "eta_to_cap_secs", None)
+    if engine_eta is not None and engine_eta <= reset_in:
+        return float(engine_eta)
+    return None
 
 
 def race_status(truth: Truth, eta: float | None) -> str:
@@ -127,9 +151,7 @@ def race_status(truth: Truth, eta: float | None) -> str:
     end = truth.end_pct
     if now is None and end is None:
         return "UNKNOWN"
-    if (now is not None and now >= 100.0) or (
-        eta is not None and eta < truth.reset_in
-    ):
+    if (now is not None and now >= 100.0) or (eta is not None and eta < truth.reset_in):
         return "OVER"
     if (now is not None and now >= 85.0) or (end is not None and end >= 85.0):
         return "TIGHT"

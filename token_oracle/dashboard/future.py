@@ -32,13 +32,16 @@ def spark_next24(profile, now: float) -> tuple[str, float]:
         t0 = now + i * 3600.0
         hours.append(float(profile_integral(profile, t0, t0 + 3600.0)))
     total = sum(hours)
-    peak = max(hours) if hours else 0.0
-    if peak <= 0:
+    mean = total / len(hours) if hours else 0.0
+    if mean <= 0:
         return " " * 24, 0.0
+    # Normalize to 2× the mean, not the peak: a flat profile then renders as a
+    # steady mid-height band instead of a solid wall of full blocks; a genuine
+    # spike still stands tall against the flat hours (plan 064).
+    ref = 2.0 * mean
     chars = []
     for h in hours:
-        # map 0..peak -> 0..8
-        level = int(round((h / peak) * 8))
+        level = int(round((h / ref) * 8))
         level = max(0, min(8, level))
         chars.append(_SPARK[level])
     return "".join(chars), total
@@ -87,13 +90,29 @@ def _status_word(status: str, enabled: bool) -> str:
 def _race_caption(truth, eta, enabled: bool) -> str:
     if truth.idle and truth.source != "live":
         return c.dim("    cap race   (idle)", enabled)
-    if truth.now_pct is not None and truth.now_pct >= 100.0:
+    now = truth.now_pct
+    if now is not None and now >= 100.0:
         return c.gauge("    cap race   already at the wall", 100.0, enabled)
     if eta is None:
-        return "    cap race   no hit before reset"
+        # No projected cap hit. Don't reassure ("no hit before reset") when the
+        # live now is already near the wall — say so factually (plan 064).
+        if now is not None and now >= 85.0:
+            return c.gauge(
+                f"    cap race   {round(now)}% now · no cap hit projected", 90.0, enabled
+            )
+        return c.dim("    cap race   no cap hit projected", enabled)
+    # eta_for_race only returns a value for a real hit before reset.
     line = f"    cap race   hit in {fmt_dh_long(eta)} if pace holds"
-    over = eta < truth.reset_in
-    return c.gauge(line, 100.0 if over else 50.0, enabled) if enabled else line
+    return c.gauge(line, 100.0, enabled) if enabled else line
+
+
+def _fmt_age(age: float) -> str:
+    a = int(age)
+    if a < 90:
+        return f"{a}s ago"
+    if a < 5400:
+        return f"~{round(a / 60)}m ago"
+    return f"~{round(a / 3600)}h ago"
 
 
 def _render_window_full(f, truth, eta, status, width: int, enabled: bool) -> list[str]:
@@ -106,15 +125,24 @@ def _render_window_full(f, truth, eta, status, width: int, enabled: bool) -> lis
     now = truth.now_pct
     if now is not None:
         pct_s = c.gauge(f"{round(now)}%", now, enabled)
+        prov = ""
         if truth.source == "live":
-            label = "    live now  "
+            # A retained / stale cell is NOT "live now"; label + age it exactly
+            # like Present so the same cell reads the same on both tabs (I4).
+            if truth.is_retained:
+                label = "    was live  "
+                prov = c.dim(" · retained", enabled)
+            else:
+                label = "    live now  "
+            if truth.age_secs is not None and truth.age_secs > 0:
+                prov += c.dim(f" · {_fmt_age(truth.age_secs)}", enabled)
         else:
             label = "    now        "
         if show_bar:
             bar = _bar(now, enabled, width=12)
-            out.append(f"{label} {pct_s}   {bar}")
+            out.append(f"{label} {pct_s}   {bar}{prov}")
         else:
-            out.append(f"{label} {pct_s}")
+            out.append(f"{label} {pct_s}{prov}")
 
     reset_s = fmt_dh_long(truth.reset_in) if truth.reset_in >= 3600 else fmt_reset(truth.reset_in)
     out.append(c.dim(f"    resets in  {reset_s}", enabled))
@@ -170,9 +198,7 @@ def render_future(
             if window_truth(f, cells).source == "live":
                 any_live = True
                 break
-    title = (
-        "Future — cap race (live when available)" if any_live else "Future — cap race"
-    )
+    title = "Future — cap race (live when available)" if any_live else "Future — cap race"
     out: list[str] = [c.dim(title, enabled), ""]
 
     if not fs:

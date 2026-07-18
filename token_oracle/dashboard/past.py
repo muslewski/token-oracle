@@ -167,7 +167,10 @@ def render_past(
         if show_cost:
             tparts.append(f"{_fmt_usd(total.cost):>8}")
         if total.pct_cap is not None and width >= 60:
-            tparts.append(f"{total.pct_cap:.0f}%")
+            # The TOTAL is a 14-day sum over ONE weekly cap — labelling it a bare
+            # "%weekly-cap" reads as over-limit when it exceeds 100. Show it as a
+            # multiple of a week's cap instead (plan 064).
+            tparts.append(f"{total.pct_cap / 100.0:.1f}×wk")
         out.append("  ".join(tparts))
         if show_cost and total.cost is not None:
             out.append(
