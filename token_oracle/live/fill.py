@@ -26,7 +26,7 @@ from .contract import (
     METRIC_WEEKLY_PCT,
     STATE_OK,
 )
-from .overlay import HEADER_FRESH_TTL_SECS
+from .overlay import FRESH_TTL_SECS
 from .store import load_snapshot
 from .trust import is_trusted_for_math, newest_first
 
@@ -115,8 +115,9 @@ def _header_weekly_pct(now: float) -> float | None:
         return None
     obs = hdr.get("observed_at")
     age = None if obs is None else max(0.0, now - float(obs))
-    # weekly moves slowly; the header may still authoritatively fill for a while.
-    if age is not None and age > HEADER_FRESH_TTL_SECS:
+    # I3: only a FRESH header (< FRESH_TTL) may re-anchor the forecast MATH. An
+    # older-but-not-reset header stays display-only (overlay shows it with age).
+    if age is None or age > FRESH_TTL_SECS:
         return None
     return float(up)
 

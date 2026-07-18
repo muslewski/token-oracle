@@ -216,3 +216,37 @@ def test_degraded_flag_on_store_error(monkeypatch, tmp_path):
     f = Forecast("weekly", 100, 1000, 23.0, None, 3600.0, False, profile="claude")
     out, degraded = apply_live_fills([f], now)  # snapshot=None → load_snapshot → boom
     assert degraded is True and out == [f]  # never blanks, but signals
+
+
+def test_i1_header_weekly_fresh_anchors(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    now = time.time()
+    monkeypatch.setattr(
+        "token_oracle.core.ratelimits.weekly",
+        lambda n=None: {
+            "used_percentage": 70.0,
+            "resets_at": now + 1e5,
+            "observed_at": now - 10.0,
+            "stale": False,
+        },
+    )
+    f = Forecast("weekly", 100, 1000, 23.0, None, 3600.0, False, profile="claude")
+    out, _ = apply_live_fills([f], now, snapshot={})
+    assert out[0].used == 700  # fresh header anchors the math
+
+
+def test_i3_header_weekly_stale_not_applied(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    now = time.time()
+    monkeypatch.setattr(
+        "token_oracle.core.ratelimits.weekly",
+        lambda n=None: {
+            "used_percentage": 88.0,
+            "resets_at": now + 1e5,
+            "observed_at": now - 4000.0,
+            "stale": False,
+        },
+    )
+    f = Forecast("weekly", 100, 1000, 23.0, None, 3600.0, False, profile="claude")
+    out, _ = apply_live_fills([f], now, snapshot={})  # header 4000s old > FRESH_TTL
+    assert out[0].used == 100  # stale header stays display-only, not math
