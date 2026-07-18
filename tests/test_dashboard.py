@@ -26,6 +26,14 @@ from token_oracle.dashboard.future import (
     render_future,
     spark_next24,
 )
+from token_oracle.dashboard.race import (
+    Truth,
+    eta_for_race,
+    margin_line,
+    profile_verdict,
+    race_status,
+    window_truth,
+)
 from token_oracle.dashboard.past import render_past, short_model, top_models_by_day
 from token_oracle.dashboard.skeleton import render_skeleton, render_stale_banner, spinner_char
 from token_oracle.dashboard.store import DashStore
@@ -651,10 +659,8 @@ def test_render_future_window_and_warning():
         Forecast("weekly", 100, 1000, 40.0, None, 400000.0, False, profile="claude"),
     ]
     text = "\n".join(render_future(fs, [1.0] * 168, 1_000_000.0, 100, False))
-    assert "5h" in text and "78%" in text
-    assert "resets" in text
-    assert "cap in" in text  # eta set on 5h
-    assert "prophecy" in text
+    assert "5h" in text
+    assert "cap race" in text.lower() or "resets" in text
     assert "next 24h" in text
     assert "\033" not in text
 
@@ -662,7 +668,7 @@ def test_render_future_window_and_warning():
 def test_render_future_no_warning_without_eta():
     fs = [Forecast("5h", 1000, 10000, 40.0, None, 3600.0, False)]
     text = "\n".join(render_future(fs, None, 0.0, 80, False))
-    assert "cap in" not in text
+    assert "no hit before reset" in text or "SAFE" in text
     assert "no burn history" in text
 
 
@@ -673,6 +679,125 @@ def test_render_future_cost_line():
     assert "spend pace" in with_c
     assert "spend pace" not in without
     assert cost_pace_line(7.0, days=7).startswith("spend pace:")
+
+
+# --- plan 062 future cap-race ------------------------------------------------
+
+
+def _race_truth(**kw):
+    base = dict(
+        now_pct=50.0,
+        source="local",
+        end_pct=50.0,
+        reset_in=3600.0,
+        idle=False,
+        window="5h",
+        cap=10000,
+        profile="claude",
+    )
+    base.update(kw)
+    return Truth(**base)
+
+
+def test_race_status_table():
+    assert race_status(_race_truth(idle=True), None) == "IDLE"
+    assert race_status(_race_truth(now_pct=100.0), None) == "OVER"
+    assert race_status(_race_truth(now_pct=50.0, end_pct=50.0, reset_in=7200.0), 3600.0) == "OVER"
+    assert race_status(_race_truth(now_pct=90.0, end_pct=40.0), None) == "TIGHT"
+    assert race_status(_race_truth(now_pct=40.0, end_pct=90.0), None) == "TIGHT"
+    assert race_status(_race_truth(now_pct=40.0, end_pct=40.0), None) == "SAFE"
+    assert race_status(_race_truth(now_pct=None, end_pct=None, source="none"), None) == "UNKNOWN"
+
+
+def test_profile_verdict_worst_of():
+    assert profile_verdict(["SAFE", "OVER", "TIGHT"]) == "OVER"
+    assert profile_verdict(["IDLE", "SAFE"]) == "SAFE"
+    assert profile_verdict(["IDLE", "UNKNOWN"]) == "IDLE"
+    assert profile_verdict([]) == "UNKNOWN"
+
+
+def test_window_truth_live_weekly():
+    f = Forecast("weekly", 100, 1000, 23.0, None, 400000.0, False, profile="claude")
+    cells = {("claude", "weekly"): LiveCell(pct=99.0, state=STATE_OK, age_secs=10.0)}
+    t = window_truth(f, cells)
+    assert t.now_pct == 99.0 and t.source == "live" and t.end_pct == 23.0
+
+
+def test_window_truth_5h_local():
+    f = Forecast("5h", 5000, 10000, 78.0, 90000.0, 8000.0, False, profile="claude")
+    cells = {("claude", "5h"): LiveCell(pct=12.0, state=STATE_OK, age_secs=5.0)}
+    t = window_truth(f, cells)
+    assert t.now_pct == 50.0 and t.source == "local"
+
+
+def test_window_truth_no_cells():
+    f = Forecast("weekly", 400, 1000, 68.0, None, 1000.0, False, profile="claude")
+    t = window_truth(f, None)
+    assert t.source in ("local", "proj")
+    assert t.now_pct is not None
+
+
+def test_eta_for_race_at_wall():
+    f = Forecast("weekly", 100, 1000, 23.0, None, 1000.0, False, profile="claude")
+    t = _race_truth(now_pct=100.0, source="live", end_pct=23.0, cap=1000, reset_in=1000.0)
+    assert eta_for_race(f, t) == 0.0
+
+
+def test_eta_for_race_live_burn():
+    f = Forecast("weekly", 100, 1000, 100.0, 999.0, 3600.0, False, profile="claude")
+    t = _race_truth(now_pct=50.0, source="live", end_pct=100.0, cap=1000, reset_in=3600.0)
+    eta = eta_for_race(f, t)
+    assert eta is not None and abs(eta - 3600.0) < 1.0
+
+
+def test_margin_line_variants():
+    assert "already at the wall" in margin_line(_race_truth(now_pct=100.0), 0.0)
+    assert "lose by" in margin_line(_race_truth(now_pct=50.0, reset_in=7200.0), 3600.0)
+    assert "clear by" in margin_line(
+        _race_truth(now_pct=50.0, end_pct=110.0, reset_in=3600.0), 7200.0
+    )
+    assert "headroom" in margin_line(
+        _race_truth(now_pct=40.0, end_pct=50.0, reset_in=3600.0), None
+    )
+
+
+def test_render_future_live_disagree_shows_both():
+    fs = [Forecast("fable", 100, 1000, 23.0, None, 400000.0, False, profile="claude")]
+    cells = {("claude", "fable"): LiveCell(pct=99.0, state=STATE_OK, age_secs=5.0)}
+    text = "\n".join(render_future(fs, None, 0.0, 100, False, cells=cells))
+    assert "99%" in text and "23%" in text
+    assert "TIGHT" in text or "OVER" in text
+    assert "may lag live" in text
+    assert "\033" not in text
+
+
+def test_render_future_multi_profile_verdicts():
+    fs = [
+        Forecast("weekly", 100, 1000, 20.0, None, 1000.0, False, profile="claude"),
+        Forecast("weekly", 100, 1000, 40.0, None, 1000.0, False, profile="grok"),
+    ]
+    cells = {
+        ("claude", "weekly"): LiveCell(pct=100.0, state=STATE_OK, age_secs=1.0),
+        ("grok", "weekly"): LiveCell(pct=40.0, state=STATE_OK, age_secs=1.0),
+    }
+    text = "\n".join(render_future(fs, None, 0.0, 100, False, cells=cells))
+    assert "CLAUDE" in text and "OVER" in text
+    assert "GROK" in text and "SAFE" in text
+
+
+def test_render_future_no_cells_no_crash():
+    fs = [Forecast("5h", 1000, 10000, 40.0, None, 3600.0, False)]
+    text = "\n".join(render_future(fs, None, 0.0, 80, False))
+    assert "SAFE" in text or "5h" in text
+    assert "may lag live" not in text
+
+
+def test_render_future_narrow_one_liner():
+    fs = [Forecast("weekly", 100, 1000, 20.0, None, 200000.0, False, profile="claude")]
+    cells = {("claude", "weekly"): LiveCell(pct=99.0, state=STATE_OK, age_secs=1.0)}
+    text = "\n".join(render_future(fs, None, 0.0, 40, False, cells=cells))
+    assert "99%" in text
+    assert "TIGHT" in text or "OVER" in text
 
 
 # --- smooth dash: skeletons + store -----------------------------------------

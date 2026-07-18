@@ -335,7 +335,7 @@ Verification baseline for every plan: `pip install -e ".[dev]"` then
 | 058 | Report core (`core/report.py` aggregation) + cached-events seam | P1 | M | — | DONE — merged with sticky-hooks (058–060) 2026-07-14 |
 | 059 | `oracle report` — daily cost+cap ledger (`--by/--since/--json`) | P1 | M | 058 | DONE — merged with sticky-hooks (058–060) 2026-07-14 |
 | 060 | Statusline headline: `$today` cost + safe `--install` auto-wire | P1 | M | 058 | DONE — merged with sticky-hooks (058–060) 2026-07-14 |
-| 062 | Future tab — live-aware cap race UX (SAFE/TIGHT/OVER) | P1 | M | 018, 020 | DESIGN — `plans/062-future-race-ux-design.md` approved 2026-07-14; impl plan next |
+| 062 | Future tab — live-aware cap race UX (SAFE/TIGHT/OVER) | P1 | M | 018, 020 | DONE — impl plan `plans/062-future-race-ux.md`; pure `dashboard/race.py` + race layout in `future.py`; `app.py` passes `st.cells`; tests in `test_dashboard.py` (live disagree, multi-profile verdicts, status table). Suite 388 pass. Manual: `oracle dash` → Future when Present weekly/fable near full live. |
 
 Status values: TODO | IN PROGRESS | DONE | BLOCKED (with one-line reason) | REJECTED (with one-line rationale — finding fixed independently or approach abandoned)
 
