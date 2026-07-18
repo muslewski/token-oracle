@@ -41,3 +41,8 @@ class Forecast:
     idle: bool
     confidence: float = 1.0
     profile: str = "default"
+    # Observed trailing burn rate (tokens/sec) at compute time; carried so a
+    # live re-anchor (windows.recompute_with_used / live.fill) can bound the
+    # projection + ETA by real recent burn instead of a self-referential
+    # projection rate (plan 063, I2). None when no recent burn was measured.
+    obs_rate: float | None = None

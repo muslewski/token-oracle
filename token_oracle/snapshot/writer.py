@@ -11,7 +11,11 @@ SCHEMA_VERSION = 1
 
 
 def forecast_to_dict(f):
-    return asdict(f)
+    d = asdict(f)
+    # obs_rate is an internal bounding artifact (plan 063), not part of the
+    # versioned public snapshot schema — keep it out of forecast.json.
+    d.pop("obs_rate", None)
+    return d
 
 
 def build_snapshot(forecasts, now):

@@ -2,62 +2,104 @@
 5h-block (rolling, anchor=None) and weekly (fixed grid, anchor set) windows
 into a single history-aware projection. Never raises."""
 
+from dataclasses import replace
+
 from .contracts import Forecast
 from .profile import HIST_SECS, profile_integral
 
+# Slack on the observed burn when bounding an end-of-window projection: only a
+# history-driven blend that exceeds this multiple of the measured burn is
+# clamped (plan 063, I2). >1 so a normal prior≈measured blend is never touched.
+PROJ_BOUND_SLACK = 2.0
 
-def eta_to_cap(used, projected_pct, time_left, cap):
-    """Seconds until usage reaches cap at the projection-implied burn. None when
-    not heading over (<=100%) or indeterminate; 0.0 when already at/over cap."""
-    if projected_pct <= 100 or cap <= 0:
+
+def observed_rate(events, start, now, rate_window_secs=3600.0):
+    """Tokens/sec burned over the recent trailing window [max(start, now-W), now].
+
+    A *measured* rate (not a projection-implied one), used to bound the
+    projection + ETA by real recent burn. None when no burn is observed.
+    """
+    lo = max(float(start), float(now) - float(rate_window_secs))
+    total = 0
+    for e in events or []:
+        try:
+            ts = float(e[0])
+            tok = int(e[1] or 0)
+        except (TypeError, ValueError, IndexError):
+            continue
+        if lo <= ts <= now:
+            total += tok
+    span = now - lo
+    if span <= 0 or total <= 0:
+        return None
+    return total / span
+
+
+def bounded_projection(used_now, obs_rate, time_left, cap, slack=1.5):
+    """End-of-window projected tokens from linear observed burn, floored at now.
+
+    When ``obs_rate`` is unknown/zero the projection is flat at ``used_now`` —
+    never invents future burn.
+    """
+    extra = 0.0 if not obs_rate or obs_rate <= 0 else obs_rate * max(0.0, time_left) * slack
+    return max(int(used_now), int(round(used_now + extra)))
+
+
+def eta_to_cap(used, cap, obs_rate, projected_pct=None):
+    """Seconds until usage reaches cap at the OBSERVED trailing burn (I2).
+
+    0.0 when already at/over cap; None when not heading over (projected<=100),
+    when there is no observed burn, or when cap is unknown."""
+    if cap <= 0:
+        return None
+    if projected_pct is not None and projected_pct <= 100:
         return None
     if used >= cap:
         return 0.0
-    if time_left <= 0:
+    if not obs_rate or obs_rate <= 0:
         return None
-    projected_tokens = projected_pct / 100.0 * cap
-    rate = (projected_tokens - used) / time_left
-    if rate <= 0:
-        return None
-    return (cap - used) / rate
+    return (cap - used) / obs_rate
 
 
-def recompute_with_used(f: Forecast, used: int) -> Forecast:
+def recompute_with_used(f: Forecast, used: int, *, obs_rate=None, active=None) -> Forecast:
     """Re-base an existing Forecast on an authoritative *current* fill (live /
-    server header).
+    server header), keeping the projection physically bounded (plan 063, I2).
 
-    Keeps the residual burn implied by the local model
-    (``projected_tokens - old_used``) and attaches it to the new ``used``.
-    Never writes current-fill % into ``projected_pct`` — that field stays
-    end-of-window projection (plan 030). Idle forecasts are left unchanged.
+    Keeps the local model's residual burn (``old_projected - old_used``) grafted
+    onto the new ``used``, but clamps the total by the observed trailing burn so
+    a locally over-projected cycle can't push a several-hundred-% end-projection
+    onto a modest server fill. ``projected_pct`` stays an end-of-window
+    projection, never a current-fill alias (plan 030). Idle forecasts pass
+    through unless ``active`` (I5: a trusted present reading overrides the
+    log-derived idle veto).
     """
-    if f is None or getattr(f, "idle", False):
+    if f is None:
+        return f
+    if getattr(f, "idle", False) and not active:
         return f
     cap = int(getattr(f, "cap", 0) or 0)
     if cap <= 0:
         return f
-    used = max(0, int(used))
+    used_now = max(0, min(int(round(used)), cap))
     old_used = int(getattr(f, "used", 0) or 0)
     old_proj_tok = float(getattr(f, "projected_pct", 0.0) or 0.0) / 100.0 * cap
-    # Tokens the local model still expected to burn before reset (can be 0 if
-    # logs already lag behind their own end-proj).
     residual = max(0.0, old_proj_tok - old_used)
-    projected_tok = used + residual
-    # Floor: never project *below* authoritative now-fill.
-    projected_tok = max(projected_tok, float(used))
-    projected_pct = projected_tok / cap * 100.0
+    projected_tok = used_now + residual
+    rate = obs_rate if obs_rate is not None else getattr(f, "obs_rate", None)
     reset_in = float(getattr(f, "reset_in_secs", 0.0) or 0.0)
-    eta = eta_to_cap(used, projected_pct, reset_in, cap)
-    return Forecast(
-        window=f.window,
-        used=used,
-        cap=cap,
+    if rate is not None:
+        # bound the grafted residual by real recent burn (kills r5 explosion)
+        projected_tok = min(projected_tok, bounded_projection(used_now, rate, reset_in, cap))
+    projected_tok = max(projected_tok, float(used_now))
+    projected_pct = projected_tok / cap * 100.0
+    eta = eta_to_cap(used_now, cap, rate, projected_pct)
+    return replace(
+        f,
+        used=used_now,
         projected_pct=projected_pct,
         eta_to_cap_secs=eta,
-        reset_in_secs=reset_in,
         idle=False,
-        confidence=float(getattr(f, "confidence", 1.0) or 1.0),
-        profile=getattr(f, "profile", "default") or "default",
+        obs_rate=rate,
     )
 
 
@@ -129,7 +171,17 @@ def compute_window(events, now, window, profile=None):
     else:
         prior_term = profile_integral(profile, now, reset)
     projected = used + (1.0 - f) * prior_term + f * measured_term
+    # Bound the history-driven blend by the observed burn so an atypical early
+    # burst (heavy prior_term at f≈0) can't project many-hundred-% (plan 063,
+    # I2). Only a blend beyond PROJ_BOUND_SLACK× the measured burn is clamped;
+    # a normal prior≈measured blend is untouched.
+    observed_bound = used + PROJ_BOUND_SLACK * measured_term
+    projected = max(float(used), min(projected, observed_bound))
     projected_pct = (projected / cap * 100) if cap else 0.0
     reset_in = reset - now
-    eta = eta_to_cap(used, projected_pct, reset_in, cap)
-    return Forecast(window.name, int(used), cap, projected_pct, eta, float(reset_in), False)
+    # ETA from the OBSERVED trailing burn, not the (now-bounded) projection rate.
+    obs_rate = observed_rate(pairs_all, start, now)
+    eta = eta_to_cap(used, cap, obs_rate, projected_pct)
+    return Forecast(
+        window.name, int(used), cap, projected_pct, eta, float(reset_in), False, obs_rate=obs_rate
+    )

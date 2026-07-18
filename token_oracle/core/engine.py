@@ -206,7 +206,8 @@ def _apply_live_fills(forecasts, now):
     try:
         from ..live.fill import apply_live_fills
 
-        return apply_live_fills(forecasts, now)
+        result, _degraded = apply_live_fills(forecasts, now)
+        return result
     except Exception:
         return forecasts
 

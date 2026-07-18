@@ -1,24 +1,37 @@
 """Apply authoritative live/server fill into Forecasts (engine write-through).
 
-Display still uses LiveCell overlay for provenance. This module improves the
-*prediction*: used, projected_pct (end-of-window), and eta_to_cap_secs, using
-high-confidence live/header fill without putting current % into projected_pct
-as a current-fill alias (plan 030).
+Display still uses the LiveCell overlay for provenance. This module improves the
+*prediction*: used, projected_pct (end-of-window) and eta_to_cap_secs, re-anchored
+on a TRUSTED present reading — fresh, high-confidence, non-retained (plan 063 I3;
+retained/stale readings stay display-only). The current % is never written into
+projected_pct as an alias (plan 030).
 
-Never probes browsers. Only reads live.json + ratelimits snapshots. Never raises.
+fill owns weekly / fable / grok windows. The Claude 5h window is owned by the
+engine's inline server path (config.try_get_claude_five_hour_data, the richer
+own-header→server→local chain) so there is no double-rebase (plan 063 T4).
+
+Never probes browsers. Only reads live.json + ratelimits snapshots. Never raises;
+returns a `degraded` flag when it swallows an error so the no-op is not silent.
 """
 
 from __future__ import annotations
 
+from dataclasses import replace
+
+from ..core.capcal import calibrate
 from ..core.windows import recompute_with_used
 from .contract import (
-    CONF_HIGH,
     METRIC_FIVE_HOUR_PCT,
     METRIC_MODEL_WEEKLY_PCT,
     METRIC_WEEKLY_PCT,
+    STATE_OK,
 )
-from .overlay import FRESH_TTL_SECS, HEADER_FRESH_TTL_SECS, RETAIN_FRESH_TTL_SECS
+from .overlay import HEADER_FRESH_TTL_SECS
 from .store import load_snapshot
+from .trust import is_trusted_for_math, newest_first
+
+# A trusted present reading of at least this % marks a log-idle window active (I5).
+ACTIVE_FLOOR = 1.0
 
 
 def _canon(profile: str) -> str:
@@ -37,69 +50,58 @@ def _wkey(window: str) -> str | None:
     return None
 
 
-def _fresh(age: float | None, ttl: float) -> bool:
-    if age is None:
-        return True
-    return age <= ttl
-
-
 def _pct_from_snapshot(snapshot: dict | None, profile: str, wkey: str, now: float) -> float | None:
-    """High-conf fresh usage % from live.json for (profile, wkey), or None."""
+    """Newest TRUSTED (fresh, high-conf, non-retained) usage % for (profile, wkey).
+
+    Returns the value of the most recently fetched trusted reading, or None.
+    Retained / stale / low-confidence readings are display-only (I3) and skipped.
+    """
     if not isinstance(snapshot, dict):
         return None
     provs = snapshot.get("providers") or {}
     p_c = _canon(profile)
-    # prefer exact provider key match, then any canon-matching key
-    candidates = []
+
+    trusted: list[dict] = []
     for raw, pdata in provs.items():
         if not isinstance(pdata, dict):
             continue
-        if _canon(str(raw)) == p_c:
-            candidates.append(pdata)
-    if not candidates:
-        return None
-
-    best = None
-    for pdata in candidates:
+        if _canon(str(raw)) != p_c:
+            continue
         pfetched = pdata.get("fetched_at")
         for r in pdata.get("readings") or []:
             if not isinstance(r, dict):
                 continue
-            conf = r.get("confidence")
-            if conf != CONF_HIGH:
-                continue
-            metric = r.get("metric")
             val = r.get("value")
             if not isinstance(val, (int, float)):
                 continue
+            metric = r.get("metric")
             match = False
             if wkey == "weekly" and metric == METRIC_WEEKLY_PCT:
                 match = True
-            elif wkey == "fable" and metric == METRIC_MODEL_WEEKLY_PCT and r.get("model") == "fable":
+            elif (
+                wkey == "fable" and metric == METRIC_MODEL_WEEKLY_PCT and r.get("model") == "fable"
+            ):
                 match = True
             elif wkey == "5h" and metric == METRIC_FIVE_HOUR_PCT:
                 match = True
-            elif (
-                wkey == "weekly"
-                and metric == METRIC_MODEL_WEEKLY_PCT
-                and r.get("model") == "grok_build"
-                and p_c == "grok"
-            ):
-                # optional: grok build sub-cap not used as weekly override
-                match = False
             if not match:
                 continue
             ex = str(r.get("extractor") or "")
             rfetched = r.get("fetched_at", pfetched)
             age = None if rfetched is None else max(0.0, now - float(rfetched))
-            ttl = RETAIN_FRESH_TTL_SECS if ex.endswith("+retained") else FRESH_TTL_SECS
-            if not _fresh(age, ttl):
+            if not is_trusted_for_math(
+                state=STATE_OK, confidence=r.get("confidence"), age_secs=age, extractor=ex
+            ):
                 continue
-            best = float(val)
-    return best
+            trusted.append({"value": float(val), "fetched_at": rfetched})
+
+    if not trusted:
+        return None
+    return float(newest_first(trusted)[0]["value"])
 
 
 def _header_weekly_pct(now: float) -> float | None:
+    """Claude weekly % from the self-ingested rate-limit header (fresh only)."""
     try:
         from ..core import ratelimits as RL
 
@@ -113,41 +115,24 @@ def _header_weekly_pct(now: float) -> float | None:
         return None
     obs = hdr.get("observed_at")
     age = None if obs is None else max(0.0, now - float(obs))
-    if not _fresh(age, HEADER_FRESH_TTL_SECS):
+    # weekly moves slowly; the header may still authoritatively fill for a while.
+    if age is not None and age > HEADER_FRESH_TTL_SECS:
         return None
     return float(up)
 
 
-def _header_five_hour_pct(now: float) -> float | None:
-    try:
-        from ..core import ratelimits as RL
-
-        fh = RL.five_hour(now)
-    except Exception:
-        return None
-    if not isinstance(fh, dict) or fh.get("stale"):
-        return None
-    up = fh.get("used_percentage")
-    if not isinstance(up, (int, float)):
-        return None
-    obs = fh.get("observed_at")
-    age = None if obs is None else max(0.0, now - float(obs))
-    # 5h moves faster — use shorter web TTL, not multi-hour header weekly TTL
-    if not _fresh(age, FRESH_TTL_SECS):
-        return None
-    return float(up)
-
-
-def fill_pct_for_window(profile: str, window: str, snapshot: dict | None, now: float) -> float | None:
+def fill_pct_for_window(
+    profile: str, window: str, snapshot: dict | None, now: float
+) -> float | None:
     """Authoritative current fill % for one window, or None if unavailable.
 
     Priority:
       weekly (claude): header rate_limits wins over web (same as overlay)
       weekly (grok) / fable: web cell
-      5h (claude): header five_hour only (web 5h lags; logs remain default)
+      5h: None here — the engine's inline server path owns Claude 5h (no double-rebase).
     """
     wkey = _wkey(window)
-    if wkey is None:
+    if wkey is None or wkey == "5h":
         return None
     p_c = _canon(profile)
 
@@ -157,9 +142,6 @@ def fill_pct_for_window(profile: str, window: str, snapshot: dict | None, now: f
             return hdr
         return _pct_from_snapshot(snapshot, profile, "weekly", now)
 
-    if wkey == "5h" and p_c == "claude":
-        return _header_five_hour_pct(now)
-
     if wkey in ("weekly", "fable"):
         return _pct_from_snapshot(snapshot, profile, wkey, now)
 
@@ -167,40 +149,46 @@ def fill_pct_for_window(profile: str, window: str, snapshot: dict | None, now: f
 
 
 def apply_live_fills(forecasts, now: float, snapshot: dict | None = None):
-    """Return a new list of Forecasts with live/server fill applied.
+    """Return (forecasts, degraded).
 
-    When snapshot is None, loads live.json (best-effort). No-op per window when
-    no usable fill. Never raises.
+    Re-anchor each non-5h Forecast on a trusted present reading: adopt a grown
+    effective cap (capcal, grow-only), rebase used, and recompute a bounded
+    end-projection + observed-rate ETA. A trusted reading of real usage revives a
+    log-idle window (I5). ``degraded`` is True iff an error was swallowed so the
+    dash can flag that live truth is not being applied. Never raises; never blanks.
     """
     try:
         fs = list(forecasts or [])
         if not fs:
-            return fs
+            return fs, False
         if snapshot is None:
             snapshot = load_snapshot()
         out = []
         for f in fs:
             try:
-                if getattr(f, "idle", False):
-                    out.append(f)
-                    continue
                 cap = int(getattr(f, "cap", 0) or 0)
-                if cap <= 0:
+                window = getattr(f, "window", "") or ""
+                profile = getattr(f, "profile", "default") or "default"
+                if cap <= 0 or _wkey(window) == "5h":
                     out.append(f)
                     continue
-                pct = fill_pct_for_window(
-                    getattr(f, "profile", "default") or "default",
-                    getattr(f, "window", "") or "",
-                    snapshot,
-                    now,
-                )
+                pct = fill_pct_for_window(profile, window, snapshot, now)
                 if pct is None:
                     out.append(f)
                     continue
-                live_used = int(round(float(pct) / 100.0 * cap))
-                out.append(recompute_with_used(f, live_used))
+                # Self-calibrate the effective cap from the corroborated ratio
+                # (grow-only). Adopt it so % and statusline k/cap track the real
+                # (possibly moved) tier instead of a stale preset.
+                cap_eff, _note = calibrate(
+                    profile, window, int(getattr(f, "used", 0) or 0), pct, cap, now
+                )
+                cap_eff = int(cap_eff or cap)
+                if cap_eff != cap:
+                    f = replace(f, cap=cap_eff)
+                used = int(round(float(pct) / 100.0 * cap_eff))
+                out.append(recompute_with_used(f, used, active=(pct >= ACTIVE_FLOOR)))
             except Exception:
                 out.append(f)
-        return out
+        return out, False
     except Exception:
-        return list(forecasts or [])
+        return list(forecasts or []), True
