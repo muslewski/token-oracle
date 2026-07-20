@@ -53,7 +53,7 @@ from .grok_extract import (
     readings_from_reset_text,
     readings_from_usage_modal,
 )
-from .store import load_snapshot
+from .store import _reading_age, load_snapshot
 
 PLAYWRIGHT_AVAILABLE = False
 sync_playwright = None  # type: ignore
@@ -1034,7 +1034,11 @@ def get_live_status(now: float | None = None) -> dict:
     Consumers (doctor, dash, live-setup) read this; the only writer is live-probe.
 
     - no snapshot → both "unavailable", message mentions "run oracle live-probe"
-    - snapshot older than STALE_AFTER → per-provider "stale", original in *_last_state
+    - a provider whose NEWEST reading is older than STALE_AFTER → per-provider
+      "stale" (reading age, not snapshot written_at — a fresh write of hours-old
+      retained readings must not read as live), original in *_last_state
+    - a provider already escalated to state "stale" by the retain-cycle guard →
+      "stale — probe failing"
     - fresh → verbatim states from snapshot + last_* times
     """
     if now is None:
@@ -1056,43 +1060,64 @@ def get_live_status(now: float | None = None) -> dict:
 
     written_at = float(snap.get("written_at") or 0.0)
     providers = snap.get("providers") or {}
-    age = now - written_at if written_at else 999999.0
+    global_age = now - written_at if written_at else 999999.0
 
     result["last_fetch"] = written_at if written_at else None
     result["last_attempt"] = now
 
-    if age > STALE_AFTER:
-        for p in ("grok", "claude"):
-            if p in providers and isinstance(providers[p], dict):
-                orig_state = providers[p].get("state", "unavailable")
-                result[p] = "stale"
-                result[f"{p}_last_state"] = orig_state
-            else:
-                result[p] = "stale"
-        result["message"] = f"snapshot is {int(age)}s old — run oracle live-probe"
-        return result
+    def _provider_age(pdata: dict) -> float:
+        # Freshness bar is the newest usable reading's age, not snapshot
+        # written_at (a partial write can stamp a fresh written_at over
+        # hours-old retained readings). Fall back to written_at when a provider
+        # carries no dated usable reading (e.g. empty/auth_no_data).
+        try:
+            pl = provider_live_from_dict(pdata)
+            a = _reading_age(pl, now)
+            if a is not None:
+                return a
+        except Exception:
+            pass
+        return global_age
 
-    # fresh snapshot: verbatim states
+    any_stale = False
+    probe_failing = False
+    oldest_stale_age = 0.0
     for p in ("grok", "claude"):
-        if p in providers and isinstance(providers[p], dict):
-            st = providers[p].get("state", "unavailable")
-            # normalize to known strings if needed
-            result[p] = (
-                st
-                if st
-                in (
-                    "ok",
-                    "rate_data_only",
-                    "authenticated_no_data",
-                    "needs_login",
-                    "error",
-                    "stale",
-                    "unavailable",
-                )
-                else "unavailable"
-            )
-        else:
+        pdata = providers.get(p)
+        if not isinstance(pdata, dict):
             result[p] = "unavailable"
+            continue
+        orig_state = pdata.get("state", "unavailable")
+        p_age = _provider_age(pdata)
+        # Retain-cycle guard already escalated this provider to a visible stale.
+        if orig_state == "stale":
+            result[p] = "stale"
+            result[f"{p}_last_state"] = orig_state
+            any_stale = True
+            probe_failing = True
+            oldest_stale_age = max(oldest_stale_age, p_age)
+            continue
+        if p_age > STALE_AFTER:
+            result[p] = "stale"
+            result[f"{p}_last_state"] = orig_state
+            any_stale = True
+            oldest_stale_age = max(oldest_stale_age, p_age)
+            continue
+        # fresh: verbatim (normalized) state
+        result[p] = (
+            orig_state
+            if orig_state
+            in (
+                "ok",
+                "rate_data_only",
+                "authenticated_no_data",
+                "needs_login",
+                "error",
+                "stale",
+                "unavailable",
+            )
+            else "unavailable"
+        )
 
     # propagate any rate info from the snapshot (for doctor/dash compat)
     for p in ("grok", "claude"):
@@ -1101,7 +1126,11 @@ def get_live_status(now: float | None = None) -> dict:
                 if isinstance(r, dict) and r.get("metric") == "rate_window":
                     result[f"{p}_query_used_pct"] = r.get("value")
 
-    if all(result.get(k) == "ok" for k in ("grok", "claude")):
+    if probe_failing:
+        result["message"] = "stale — probe failing (run oracle live-probe)"
+    elif any_stale:
+        result["message"] = f"snapshot is {int(oldest_stale_age)}s old — run oracle live-probe"
+    elif all(result.get(k) == "ok" for k in ("grok", "claude")):
         result["message"] = "live web active"
     elif any(result.get(k) == "rate_data_only" for k in ("grok", "claude")):
         result["message"] = (

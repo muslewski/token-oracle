@@ -691,10 +691,18 @@ def _render_profile_block(
         elif row_src == "web":
             age = int(cell.age_secs) if getattr(cell, "age_secs", None) is not None else 0
             ex = cell.extractor or ""
-            domain = "claude.ai" if p_canon == "claude" else "grok.com"
-            base = f"live {domain}"
-            if ex:
-                base += f" · {ex}"
+            if ex == "header" or ex.startswith("header"):
+                base = "live header (Claude Code rate_limits)"
+            elif ex.endswith("+retained"):
+                base = "retained last-good (probe empty / bot challenge)"
+                bare = ex[: -len("+retained")] or "web"
+                if bare:
+                    base += f" · was {bare}"
+            else:
+                domain = "claude.ai" if p_canon == "claude" else "grok.com"
+                base = f"live {domain}"
+                if ex:
+                    base += f" · {ex}"
             prov = f"{base} · {age}s ago" if age else base
         elif cell and cell.state in (
             STATE_AUTH_NO_DATA,
@@ -1330,6 +1338,7 @@ def run(cfg):
                                 w,
                                 enabled,
                                 cost_line=st.cost_line,
+                                cells=st.cells,
                             )
                         painter.paint(
                             _paint_tab_frame(active_tab, body, w, enabled),

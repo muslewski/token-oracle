@@ -1,8 +1,16 @@
 import json
 
+import pytest
+
 from token_oracle.core.config import Config
 from token_oracle.core.contracts import Forecast, Window
 from token_oracle.core.engine import detect_resets, forecast, multi_forecast
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_live_store(monkeypatch, tmp_path):
+    """Forecast write-through reads live.json + ratelimits from XDG — isolate."""
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg-data"))
 
 
 def test_forecast_over_generic_source(tmp_path):
@@ -280,17 +288,21 @@ def test_single_path_scan_failure_falls_back_to_cached_events(monkeypatch, tmp_p
     assert five.used >= 5000
 
 
-def test_server_5h_does_not_overwrite_projected_pct(monkeypatch, tmp_path):
-    """Server current % updates used/reset only — never projected_pct (plan 030)."""
+def test_server_5h_anchors_used_and_projects_flat(monkeypatch, tmp_path):
+    """5h anchors used to the server % and projects FLAT: the local 5h token
+    count is raw tokens while the server % is a weighted rate-limit measure
+    (different scales), so no speculative end-proj/ETA is derived (plan 063)."""
     import token_oracle.core.engine as ENG
 
     local_proj = 42.0
+    local_used = 1000
+    cap = 220000
 
     # Force compute_window to a known projection, then apply server overlay.
     def fake_compute(events, now, w, prof):
         from token_oracle.core.contracts import Forecast
 
-        return Forecast(w.name, 1000, w.cap, local_proj, None, 999.0, False)
+        return Forecast(w.name, local_used, w.cap, local_proj, None, 999.0, False)
 
     monkeypatch.setattr(ENG, "compute_window", fake_compute)
     monkeypatch.setattr(
@@ -318,10 +330,13 @@ def test_server_5h_does_not_overwrite_projected_pct(monkeypatch, tmp_path):
         "profile": [],
         "lastAggregate": now,
     }
-    wins = [{"name": "5h", "cap": 220000, "period_secs": 18000}]
+    wins = [{"name": "5h", "cap": cap, "period_secs": 18000}]
     _, fs = ENG._forecast_one(now, "claude_code", {}, wins, cslice)
     assert len(fs) == 1
     f = fs[0]
-    assert f.projected_pct == local_proj  # NOT 77
+    live_used = int(round(77.0 / 100.0 * cap))
+    assert f.used == live_used
     assert f.reset_in_secs == 3600.0
-    assert f.used == int(round(77.0 / 100.0 * 220000))
+    # flat off server truth: end-proj == now%, no wrong-scale extrapolation, no ETA
+    assert abs(f.projected_pct - 77.0) < 0.01
+    assert f.eta_to_cap_secs is None

@@ -84,13 +84,13 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
         # compute_window accepts either pairs or full events.
         f = compute_window(events, now, w, prof)
         # For the 5h/current block on Claude, prefer server rate-limit data for the
-        # *reset clock* and *used* fill when present. Do NOT write current-usage %
-        # into Forecast.projected_pct — that field is end-of-window projection
-        # (plan 030 semantics). Local projection stays; used is corrected from
-        # server fill so statusline k/cap stays honest. Display of live current %
-        # on the dash goes through LiveCell overlay, not this field.
-        # Only apply for claude_code source (avoid polluting generic tests or non-claude profiles
-        # that happen to name a window "5h").
+        # *reset clock* and *used* fill when present. The 5h number is authoritative
+        # from the server; the local 5h token count is raw tokens on a different
+        # scale than the server's weighted %, so we anchor used to server truth and
+        # project FLAT (plan 063) — a local-derived 5h end-projection would be
+        # wrong-scale garbage. Display of live current % on the dash goes through
+        # the LiveCell overlay. Only apply for claude_code source (avoid polluting
+        # generic tests or non-claude profiles that happen to name a window "5h").
         if (
             source_name == "claude_code"
             and (w.name.lower() in ("5h", "5-hour", "session", "current"))
@@ -100,9 +100,19 @@ def _forecast_one(now, source_name, source_opts, windows_raw, cache_slice):
             if data:
                 if data.get("reset_in_secs") is not None:
                     object.__setattr__(f, "reset_in_secs", data["reset_in_secs"])
-                # Server current fill → used only (never projected_pct).
                 if data.get("projected_pct") is not None and data.get("source") == "server":
-                    object.__setattr__(f, "used", int(round(data["projected_pct"] / 100.0 * w.cap)))
+                    server_pct = float(data["projected_pct"])
+                    live_used = max(0, min(int(round(server_pct / 100.0 * w.cap)), w.cap))
+                    # The local 5h token count is raw tokens; the server 5h % is a
+                    # weighted rate-limit measure — different scales. Anchor `used`
+                    # to server truth and project FLAT (no reliable server-scale
+                    # pace) instead of extrapolating a wrong-scale local burst into
+                    # an absurd end-projection/ETA (plan 063 I1/I2).
+                    object.__setattr__(f, "used", live_used)
+                    object.__setattr__(
+                        f, "projected_pct", 100.0 * live_used / w.cap if w.cap else 0.0
+                    )
+                    object.__setattr__(f, "eta_to_cap_secs", None)
             else:
                 claude_rem = try_get_claude_five_hour_remaining(now)
                 if claude_rem is not None and claude_rem > 0:
@@ -145,7 +155,7 @@ def forecast(now, config=None):
             if changed:
                 cache["lastAggregate"] = now
                 save_cache(cache, cfg.cache_path)
-            return results
+            return _apply_live_fills(results, now)
         else:
             # legacy single path (exact previous behavior)
             from ..sources.base import get_source
@@ -179,11 +189,19 @@ def forecast(now, config=None):
                     if data:
                         if data.get("reset_in_secs") is not None:
                             object.__setattr__(f, "reset_in_secs", data["reset_in_secs"])
-                        # Server current fill → used only (never projected_pct).
+                        # Server current fill → used. The local 5h token count is
+                        # raw tokens; the server 5h % is a weighted rate-limit
+                        # measure (different scales), so project FLAT off server
+                        # truth rather than extrapolate a wrong-scale local burst
+                        # into an absurd end-proj/ETA (plan 063 I1/I2).
                         if data.get("projected_pct") is not None and data.get("source") == "server":
+                            server_pct = float(data["projected_pct"])
+                            live_used = max(0, min(int(round(server_pct / 100.0 * w.cap)), w.cap))
+                            object.__setattr__(f, "used", live_used)
                             object.__setattr__(
-                                f, "used", int(round(data["projected_pct"] / 100.0 * w.cap))
+                                f, "projected_pct", 100.0 * live_used / w.cap if w.cap else 0.0
                             )
+                            object.__setattr__(f, "eta_to_cap_secs", None)
                     else:
                         claude_rem = try_get_claude_five_hour_remaining(now)
                         if claude_rem is not None and claude_rem > 0:
@@ -192,9 +210,23 @@ def forecast(now, config=None):
 
             for f in fs:
                 object.__setattr__(f, "profile", "default")
-            return fs
+            return _apply_live_fills(fs, now)
     except Exception:
         return []
+
+
+def _apply_live_fills(forecasts, now):
+    """Best-effort: re-base used/end-proj/eta on live.json + header fills.
+
+    Isolated so a broken live store never blanks forecasts. No browser I/O.
+    """
+    try:
+        from ..live.fill import apply_live_fills
+
+        result, _degraded = apply_live_fills(forecasts, now)
+        return result
+    except Exception:
+        return forecasts
 
 
 def multi_forecast(now, config=None):

@@ -37,6 +37,24 @@ def _read_claude_weekly_header(now):
 # logs), so a longer window is still truthful. See app.LIVE_PROBE_INTERVAL.
 FRESH_TTL_SECS = 600.0
 
+# Last-good retained readings (extractor ends with +retained) and statusline
+# header weekly may be hours old while still truthful for weekly caps.
+# Matches store.RETAIN_MAX_AGE_SECS.
+RETAIN_FRESH_TTL_SECS = 6 * 3600.0
+HEADER_FRESH_TTL_SECS = 6 * 3600.0
+
+
+def _retained_flag(extractor: str, age_secs: float | None) -> bool:
+    """Honest-provenance (plan 063, I4): a cell is 'retained' — displayed but not
+    freshly probed — when it came from a last-good '+retained' reading OR its age
+    exceeds the math-freshness bar FRESH_TTL_SECS. Such a cell is still shown
+    (state stays OK for slow-moving caps) but callers can render its age instead
+    of a bare 'live'.
+    """
+    if isinstance(extractor, str) and extractor.endswith("+retained"):
+        return True
+    return age_secs is not None and age_secs > FRESH_TTL_SECS
+
 
 @dataclass(frozen=True)
 class LiveCell:
@@ -45,6 +63,7 @@ class LiveCell:
     pct is set ONLY for high-confidence fresh readings.
     state reflects provider state or STATE_STALE.
     state_value carries e.g. "starts_on_first_message" for special 5h handling.
+    is_retained flags a display-only last-good / over-fresh cell (plan 063 I4).
     """
 
     pct: float | None  # applied live percentage, or None
@@ -53,6 +72,7 @@ class LiveCell:
     evidence: str = ""
     extractor: str = ""
     state_value: str | None = None
+    is_retained: bool = False
 
 
 def _canon(p: str) -> str:
@@ -104,8 +124,9 @@ def overlay_cells(
             ex = str(r.get("extractor", ""))
             rfetched = r.get("fetched_at", pfetched)
             rage = None if rfetched is None else max(0.0, now - float(rfetched))
-            rstale = rage is not None and rage > ttl
-
+            # Retained last-good readings get a longer TTL (weekly caps move slowly).
+            use_ttl = RETAIN_FRESH_TTL_SECS if ex.endswith("+retained") else ttl
+            rstale = rage is not None and rage > use_ttl
             cstate = STATE_STALE if rstale else pstate
             apply = (conf == CONF_HIGH) and (not rstale)
             pct = float(val) if (apply and isinstance(val, (int, float))) else None
@@ -121,6 +142,7 @@ def overlay_cells(
                 evidence=ev,
                 extractor=ex,
                 state_value=state_val,
+                is_retained=_retained_flag(ex, rage),
             )
 
             if metric == METRIC_WEEKLY_PCT:
@@ -137,13 +159,16 @@ def overlay_cells(
                 if existing:
                     # prefer a pct if present from five_hour_pct reading
                     merged_pct = existing.pct if existing.pct is not None else pct
+                    merged_ex = existing.extractor or ex
+                    merged_age = existing.age_secs if existing.age_secs is not None else rage
                     cells[(p_c, "5h")] = LiveCell(
                         pct=merged_pct,
                         state=existing.state if existing.state != STATE_STALE else cstate,
-                        age_secs=existing.age_secs if existing.age_secs is not None else rage,
+                        age_secs=merged_age,
                         evidence=existing.evidence or ev,
-                        extractor=existing.extractor or ex,
+                        extractor=merged_ex,
                         state_value=state_val,
+                        is_retained=existing.is_retained or _retained_flag(merged_ex, merged_age),
                     )
                 else:
                     cells[(p_c, "5h")] = cell
@@ -157,7 +182,9 @@ def overlay_cells(
         up = hdr.get("used_percentage")
         obs = hdr.get("observed_at")
         age = None if obs is None else max(0.0, now - float(obs))
-        fresh = (age is None) or (age <= ttl)
+        # Header weekly is server truth from statusline; tolerate multi-hour gaps
+        # between Claude sessions (idle sessions stop feeding rate_limits).
+        fresh = (age is None) or (age <= HEADER_FRESH_TTL_SECS)
         if up is not None and not hdr.get("stale", False) and fresh:
             cells[("claude", "weekly")] = LiveCell(
                 pct=float(up),
@@ -166,6 +193,7 @@ def overlay_cells(
                 evidence="claude rate-limit header (seven_day)",
                 extractor="header",
                 state_value=None,
+                is_retained=_retained_flag("header", age),
             )
 
     return cells
