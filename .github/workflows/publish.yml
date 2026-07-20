@@ -17,6 +17,7 @@ on:
   push:
     tags:
       - "v*"
+      - "token-oracle-v*"
   workflow_dispatch:
 
 permissions:
