@@ -42,7 +42,7 @@ token-oracle = "token_oracle.cli.main:main"
 oracle = "token_oracle.cli.main:main"
 
 [project.urls]
-Homepage = "https://github.com/muslewski/token-oracle"
+Homepage = "https://oracle.muslewski.com/"
 Repository = "https://github.com/muslewski/token-oracle"
 Issues = "https://github.com/muslewski/token-oracle/issues"
 Changelog = "https://github.com/muslewski/token-oracle/blob/main/CHANGELOG.md"

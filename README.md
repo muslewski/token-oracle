@@ -54,9 +54,10 @@ bunx token-oracle dash        # Bun
 uvx token-oracle dash         # uv
 ```
 
-**Or install** the `token-oracle` command onto your PATH:
+**Or install** the `token-oracle` / `oracle` command onto your PATH:
 
 ```bash
+npm install -g token-oracle    # Node shim → runs uvx/pipx/python under the hood
 curl -fsSL https://raw.githubusercontent.com/muslewski/token-oracle/main/install.sh | sh
 uv tool install token-oracle   # uv (isolated, fast)
 pipx install token-oracle      # pipx (isolated)
@@ -64,8 +65,9 @@ pip install token-oracle       # pip
 ```
 
 > `npx`/`bunx`/`uvx` fetch and run the latest release on demand; the installers
-> put it on your PATH. All routes are the same offline-first tool — see
-> [SETUP.md](./SETUP.md) for live web data and configuration.
+> put it on your PATH. The npm package is a thin launcher over the PyPI tool.
+> All routes are the same offline-first CLI — see [SETUP.md](./SETUP.md) for
+> live web data and configuration.
 
 ## Quickstart
 

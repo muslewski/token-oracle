@@ -1,24 +1,35 @@
 {
   "name": "token-oracle",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Forecast when you'll hit your Claude Code / Grok token limits — offline from local logs, optionally browser-verified. Python CLI, runnable with npx/bunx.",
   "bin": {
-    "token-oracle": "bin/cli.js"
+    "token-oracle": "bin/cli.js",
+    "oracle": "bin/cli.js"
   },
   "keywords": [
-    "claude", "claude-code", "grok", "tokens", "token-usage", "usage",
-    "forecast", "cli", "ccusage", "anthropic", "xai"
+    "claude",
+    "claude-code",
+    "grok",
+    "tokens",
+    "token-usage",
+    "usage",
+    "forecast",
+    "cli",
+    "ccusage",
+    "anthropic",
+    "xai"
   ],
-  "homepage": "https://github.com/muslewski/token-oracle#readme",
+  "homepage": "https://oracle.muslewski.com/",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/muslewski/token-oracle.git"
+    "url": "git+https://github.com/muslewski/token-oracle.git",
+    "directory": "npm"
   },
   "bugs": {
     "url": "https://github.com/muslewski/token-oracle/issues"
   },
   "license": "MIT",
-  "author": "Mateusz Muślewski",
+  "author": "Mateusz Muślewski <10kento10@gmail.com>",
   "engines": {
     "node": ">=14"
   },
