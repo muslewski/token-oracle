@@ -1,43 +1,37 @@
-# awesome-claude-code Submission — token-oracle
+# awesome-claude-code — token-oracle
 
-**List:** [hesreallyhim/awesome-claude-code](https://github.com/hesreallyhim/awesome-claude-code)
-
-**Submit (web UI only):**  
+Submit (browser, yourself):  
 https://github.com/hesreallyhim/awesome-claude-code/issues/new?template=recommend-resource.yml&title=%5BResource%5D%3A%20token-oracle
 
-> Bake check ([#2310](https://github.com/hesreallyhim/awesome-claude-code/issues/2310)): created **2026-06-30** — ~3 weeks public. Fits “a few weeks,” not day-1.
+Public since 2026-06-30. Not on the list yet (re-check before submit).
 
 ---
 
-## Form fields
+## Form
 
 | Field | Value |
 |---|---|
-| **Display Name** | `token-oracle` |
-| **Category** | `Observability & Monitoring` |
-| **Link** | `https://github.com/muslewski/token-oracle` |
-| **Author Name** | `muslewski` |
-| **Author Link** | `https://github.com/muslewski` |
+| **Display Name** | token-oracle |
+| **Category** | Observability & Monitoring |
+| **Link** | https://github.com/muslewski/token-oracle |
+| **Author Name** | Mateusz Muślewski |
+| **Author Link** | https://github.com/muslewski |
 
 **Description:**
 
 ```
-Offline-first forecast of Claude Code and Grok token usage caps from local logs — no provider API keys. CLI (`token-oracle` / `oracle`) with `dash`, `forecast`, `report`, and statusline install; runnable via `npx token-oracle`, `uvx`, or pip. MIT.
+Local CLI that estimates how long until your coding-agent usage caps run out, from log files on disk — no provider API keys. Dashboard, forecast, daily report, optional statusline. Install with pip/uv or run via npx. MIT.
 ```
 
-**Checklist:**
-
-- [x] Not already on the list *(checked 2026-07-21)*
-- [x] Links public and working
-- [x] Specific to Claude Code *(primary ingest is Claude Code JSONL usage trails; optional Grok; statusline for Claude/tmux)*
+Checklist: not already listed · links work · useful with Claude Code (reads its local usage logs).
 
 ---
 
-## Install one-liner (for reviewers)
+## Reviewer smoke
 
 ```bash
-npx token-oracle dash
-# or: uvx token-oracle forecast
+npx token-oracle forecast
+# or: uvx token-oracle dash
 ```
 
-Website: https://oracle.muslewski.com · npm: `token-oracle` · PyPI: `token-oracle`
+Site: https://oracle.muslewski.com
