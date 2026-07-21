@@ -18,6 +18,7 @@
   <a href="https://github.com/muslewski/token-oracle/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/muslewski/token-oracle/ci.yml?label=CI&cacheSeconds=3600" alt="CI"></a>
   <a href="https://pypi.org/project/token-oracle/"><img src="https://img.shields.io/pypi/pyversions/token-oracle?cacheSeconds=3600" alt="Python versions"></a>
   <img src="https://img.shields.io/badge/license-MIT-green" alt="MIT license">
+  <a href="https://github.com/muslewski/token-oracle/discussions"><img src="https://img.shields.io/badge/discussions-join-9d4edd?style=flat-square" alt="Discussions"></a>
 </p>
 
 <p align="center"><img src="./assets/demo-dash.gif" width="720" alt="oracle dash demo"></p>
@@ -184,6 +185,19 @@ keep the file fresh automatically.
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). In brief: fork → branch from `main` → `pytest` + `ruff check` + `mypy` → pull request.
+
+
+## Community
+
+- **Website:** [oracle.muslewski.com](https://oracle.muslewski.com)
+- **Questions & ideas:** [Discussions](https://github.com/muslewski/token-oracle/discussions)
+- **Bugs & features:** [Issues](https://github.com/muslewski/token-oracle/issues/new/choose)
+- **Contributing:** [CONTRIBUTING.md](./CONTRIBUTING.md)
+- **Code of Conduct:** [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+- **Security:** [SECURITY.md](./SECURITY.md) (private reports only)
+- **Support matrix:** [SUPPORT.md](./SUPPORT.md)
+
+If you're not sure whether something is a bug, **start a Discussion** — maintainers can promote it to an issue when it is.
 
 ## License
 

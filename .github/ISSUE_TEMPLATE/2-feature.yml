@@ -1,22 +1,38 @@
-name: Feature Request
-description: Suggest an idea for token-oracle
-labels: ["enhancement"]
+name: Feature request
+description: Suggest an improvement or new capability
+labels: [enhancement]
 body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first — it helps us find simpler alternatives.
+
+        For open-ended brainstorming, prefer
+        [Discussions](https://github.com/muslewski/token-oracle/discussions).
+
   - type: textarea
     id: problem
     attributes:
       label: What problem does this solve?
+      description: "Example: I'm always frustrated when..."
     validations:
       required: true
+
   - type: textarea
     id: solution
     attributes:
-      label: Describe the solution you'd like
+      label: Proposed solution
+      description: Describe what you'd like to happen.
     validations:
       required: true
+
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives considered
-    validations:
-      required: false
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Screenshots, links, prior art, related tools in the fleet, etc.

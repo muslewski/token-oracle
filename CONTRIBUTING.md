@@ -2,6 +2,17 @@
 
 Bug reports and pull requests are welcome. Please read this before opening an issue or PR.
 
+
+## Community
+
+| Kind | Where |
+|---|---|
+| Questions, ideas, show-and-tell | [Discussions](https://github.com/muslewski/token-oracle/discussions) |
+| Bugs & concrete feature requests | [Issues](https://github.com/muslewski/token-oracle/issues/new/choose) |
+| Security | [SECURITY.md](./SECURITY.md) — private only |
+
+Please follow the [Code of Conduct](./CODE_OF_CONDUCT.md).
+
 ## Development setup
 
 ```bash

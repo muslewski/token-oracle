@@ -1,25 +1,21 @@
-## Summary
+## What does this PR do?
 
-<!-- Describe the change and why it's needed -->
+<!-- 1–3 bullet points describing the change -->
 
 ## Type of change
 
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation
-- [ ] Chore / maintenance
+- [ ] Bug fix (non-breaking change that fixes an issue)
+- [ ] New feature (non-breaking change that adds functionality)
+- [ ] Breaking change (fix or feature that changes existing behavior)
+- [ ] Documentation / tooling only
 
-## Testing
+## Checklist
 
-- [ ] `pytest` passes
-- [ ] `ruff check token_oracle/` passes
-- [ ] `mypy token_oracle/ --ignore-missing-imports` passes
+- [ ] I read [CONTRIBUTING.md](../CONTRIBUTING.md)
+- [ ] Tests / checks mentioned in CONTRIBUTING pass locally
+- [ ] No secrets in the diff (`ghp_`, `sk-`, `AKIA`, `xoxb-`, hardcoded tokens)
+- [ ] Docs / README updated if user-facing behavior changed
 
-## Secret-pattern checklist
+## Notes for reviewer
 
-Confirm no secrets or credentials appear in this diff:
-
-- [ ] No `sk-` prefixed strings (API keys)
-- [ ] No `AKIA` prefixed strings (AWS access key IDs)
-- [ ] No `ghp_` prefixed strings (GitHub personal access tokens)
-- [ ] No `xoxb-` or `xoxp-` prefixed strings (Slack tokens)
+<!-- Anything the reviewer should pay particular attention to -->
