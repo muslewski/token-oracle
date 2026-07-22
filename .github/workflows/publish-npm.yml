@@ -1,14 +1,8 @@
-name: Publish npm shim
+name: Publish npm package
 
-# Publishes the Node npx/bunx wrapper from npm/ (Python stays on PyPI via publish.yml).
-# Needs repo secret NPM_TOKEN (same automation token as agentic-sage).
+# Canonical: ship-npm  OR  fleet workflow on muslewski/agentic-sage
+# Manual-only — no tag trigger (avoids ENEEDAUTH without per-repo secret).
 on:
-  push:
-    tags:
-      - 'v*'
-      - 'token-oracle-v*'
-    paths:
-      - 'npm/**'
   workflow_dispatch:
 
 permissions:
@@ -16,8 +10,11 @@ permissions:
   id-token: write
 
 jobs:
-  publish-npm:
+  publish:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: npm
     steps:
       - uses: actions/checkout@v4
 
@@ -26,8 +23,17 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - name: Publish npm shim with provenance
-        working-directory: npm
+      - name: Require NPM_TOKEN (prefer ship-npm / fleet)
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN}" ]; then
+            echo "::error::No NPM_TOKEN on this repo. Use ship-npm or:"
+            echo "  gh workflow run 'Fleet npm publish' -R muslewski/agentic-sage"
+            exit 1
+          fi
+
+      - name: Publish with provenance
         run: npm publish --provenance --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
