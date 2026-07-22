@@ -1,8 +1,11 @@
 name: Publish npm package
 
-# Canonical: ship-npm  OR  fleet workflow on muslewski/agentic-sage
-# Manual-only — no tag trigger (avoids ENEEDAUTH without per-repo secret).
+# NPM_TOKEN on every fleet repo. Also: ship-npm · agentic-sage fleet publish.
 on:
+  push:
+    tags:
+      - 'v*'
+      - 'token-oracle-v*'
   workflow_dispatch:
 
 permissions:
@@ -22,16 +25,6 @@ jobs:
         with:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
-
-      - name: Require NPM_TOKEN (prefer ship-npm / fleet)
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          if [ -z "${NODE_AUTH_TOKEN}" ]; then
-            echo "::error::No NPM_TOKEN on this repo. Use ship-npm or:"
-            echo "  gh workflow run 'Fleet npm publish' -R muslewski/agentic-sage"
-            exit 1
-          fi
 
       - name: Publish with provenance
         run: npm publish --provenance --access public
