@@ -4,6 +4,29 @@ All notable changes to token-oracle are documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3](https://github.com/muslewski/token-oracle/compare/token-oracle-v0.1.2...token-oracle-v0.1.3) (2026-07-23)
+
+
+### Features
+
+* **npm:** publish npx shim token-oracle@0.1.2 ([0c0124a](https://github.com/muslewski/token-oracle/commit/0c0124acc440aee557e65aacb0372dda27313bc0))
+
+
+### Documentation
+
+* **atlas:** add token-oracle-mind seed map + wire memory-atlas ([d74008d](https://github.com/muslewski/token-oracle/commit/d74008daab8568f81373e913fe5dfaa671dd66d0))
+* awesome-claude-code submission payloads (ready to submit) ([a91dfc6](https://github.com/muslewski/token-oracle/commit/a91dfc692ac5b50e832640473187a4edd683ee00))
+* describe local logs + optional live data (not offline-only) ([b04ab9b](https://github.com/muslewski/token-oracle/commit/b04ab9be66e81ac1e2c792ab0b85b794fae23780))
+* expand public product docs (install, config, live, CLI, snapshot) ([15624ba](https://github.com/muslewski/token-oracle/commit/15624ba12b9150c0f9a3f389d7064696f6741876))
+* fleet public-docs pattern (docs-kit) ([945420f](https://github.com/muslewski/token-oracle/commit/945420f45bb216555c3a3186cf289ca4ff1c63b9))
+* human-voiced awesome-list payloads (author only, no model co-credit) ([c2bb08a](https://github.com/muslewski/token-oracle/commit/c2bb08a4e57c6c553ae9e7ac30a76655dd3285f1))
+* launch kit — Show HN + awesome-tmux (human voice, low spam) ([675a243](https://github.com/muslewski/token-oracle/commit/675a2430612ec594a12946ab9642185470e88776))
+* link marketing site and brand art in README ([f322a04](https://github.com/muslewski/token-oracle/commit/f322a048505921b1cf7ee03ae29df9849c74382f))
+* mind README — informal contribute-with-vault note ([c058681](https://github.com/muslewski/token-oracle/commit/c058681203f5f90efda219c45f76070fdcef7e2c))
+* move internal notes into Atlas mind; keep docs/ public-only ([8f20215](https://github.com/muslewski/token-oracle/commit/8f20215c575da4596ab21bb8738722130db9424f))
+* **oss:** community health — discussions, templates, CONTRIBUTING ([0e2d1b6](https://github.com/muslewski/token-oracle/commit/0e2d1b65d91b938690cfad6ed02259262f5a2694))
+* project mind as informal contribution convention ([511860e](https://github.com/muslewski/token-oracle/commit/511860eed9795d4bafa534fa1d627908e01521d0))
+
 ## [0.1.2](https://github.com/muslewski/token-oracle/compare/token-oracle-v0.1.1...token-oracle-v0.1.2) (2026-07-20)
 
 
