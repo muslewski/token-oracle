@@ -1,9 +1,60 @@
 {
   "title": "token-oracle",
-  "description": "Token rate & cap forecasts for Claude Code and Grok — local logs + optional live data",
+  "description": "Token rate & cap forecasts for Claude Code and Grok \u2014 local logs + optional live data",
   "sidebar": [
-    { "title": "Home", "href": "index.md" },
-    { "title": "Getting started", "href": "getting-started.md" },
-    { "title": "Works with", "href": "works-with.md" }
+    {
+      "title": "Home",
+      "href": "index.md"
+    },
+    {
+      "title": "Getting started",
+      "href": "getting-started.md"
+    },
+    {
+      "title": "Guides",
+      "items": [
+        {
+          "title": "Install",
+          "href": "install.md"
+        },
+        {
+          "title": "Configuration",
+          "href": "configuration.md"
+        },
+        {
+          "title": "Live data",
+          "href": "live.md"
+        },
+        {
+          "title": "Server truth",
+          "href": "live-server-truth.md"
+        },
+        {
+          "title": "Statusline & tmux",
+          "href": "statusline.md"
+        },
+        {
+          "title": "Integrations",
+          "href": "integrations.md"
+        }
+      ]
+    },
+    {
+      "title": "Reference",
+      "items": [
+        {
+          "title": "CLI",
+          "href": "cli.md"
+        },
+        {
+          "title": "Adapters & snapshot",
+          "href": "adapters.md"
+        }
+      ]
+    },
+    {
+      "title": "Works with",
+      "href": "works-with.md"
+    }
   ]
 }

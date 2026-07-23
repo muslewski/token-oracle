@@ -1,39 +1,46 @@
 ---
 title: "Documentation"
-description: "Token-oracle product docs — install, forecast, dashboard, and fleet interop."
+description: "token-oracle product docs — install, forecast, dashboard, live data, statusline, and fleet interop."
 section: home
 order: 0
 ---
 
 # token-oracle documentation
 
-**token-oracle** forecasts when you will hit Claude Code / Grok token caps. Offline from local logs; optional browser-verified live overlay. No provider API keys.
+**token-oracle** forecasts when you will hit Claude Code / Grok token caps — offline from local logs, with optional browser-verified live overlay. No provider API keys required for the core path.
 
-Site: [oracle.muslewski.com](https://oracle.muslewski.com) · PyPI: [`token-oracle`](https://pypi.org/project/token-oracle/) · npm shim: [`token-oracle`](https://www.npmjs.com/package/token-oracle)
+Site: [oracle.muslewski.com](https://oracle.muslewski.com) · PyPI · npm shim · GitHub
 
 ## Start here
 
 | Path | For |
 |------|-----|
-| [Getting started](./getting-started.md) | Install → `init` → `forecast` / `dash` → `doctor` |
-| [Works with](./works-with.md) | Fleet siblings (herald, sage, atlas, armory, ferry) |
+| [Getting started](./getting-started.md) | First hour: install → init → forecast / dash |
+| [Install](./install.md) | pipx, npm, source, library use |
+| [Configuration](./configuration.md) | Profiles, windows, caps, cost |
+| [CLI reference](./cli.md) | Every day-one command |
 
-## Doctrine (short)
+## Live & status surfaces
 
-1. **Offline-first** — projections come from logs already on disk; live web is opt-in.
-2. **Honest states** — missing data, needs-login, or rate-only never invents a number.
-3. **Snapshot is the contract** — `forecast.json` (schema 1) is what status bars and judges consume.
-4. **Loose coupling** — consumers read the file; oracle never mutates sibling configs.
+| Path | For |
+|------|-----|
+| [Live data](./live.md) | Browser-verified numbers (opt-in) |
+| [Server truth](./live-server-truth.md) | 5h / weekly live windows |
+| [Statusline & tmux](./statusline.md) | Shell bar + tmux `status-right` |
+| [Integrations](./integrations.md) | Fleet and optional hooks |
 
-## Where other knowledge lives
+## Reference & fleet
 
-| Kind | Location |
-|------|----------|
-| **Public product docs** | `docs/` (this tree) |
-| **Architecture mind (Atlas)** | [`token-oracle-mind/`](../token-oracle-mind/) — zones, decisions, specs, plans |
-| **Agent install runbook** | [`AGENTS.md`](../AGENTS.md) |
-| **Human setup deep-dive** | [`SETUP.md`](../SETUP.md) |
-| **Source / consumer contracts** | [`ADAPTERS.md`](../ADAPTERS.md) |
-| **Changelog** | [`CHANGELOG.md`](../CHANGELOG.md) |
+| Path | For |
+|------|-----|
+| [Adapters & snapshot](./adapters.md) | `forecast.json` contract |
+| [Works with](./works-with.md) | herald, sage, atlas, armory, ferry |
 
-Agent design specs and implementation plans live in the mind vault (`token-oracle-mind/specs/`, `plans/`), not under public `docs/`.
+## Doctrine
+
+1. **Offline-first** — projections from logs on disk; live is opt-in.  
+2. **Honest states** — missing data never invents a number.  
+3. **Snapshot is the contract** — consumers read `forecast.json`.  
+4. **Loose coupling** — oracle does not mutate sibling tool configs.
+
+Internal specs/plans live in [`token-oracle-mind/`](../token-oracle-mind/) (Atlas), not under public `docs/`.
