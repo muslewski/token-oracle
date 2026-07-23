@@ -2,6 +2,10 @@
 
 Deterministic runbook for a coding agent setting up and verifying token-oracle.
 Follow the steps in order; each includes the exact command and expected output.
+The human-facing deep-dive is [`SETUP.md`](./SETUP.md); the product overview is
+[`README.md`](./README.md). **Public product docs hub:** [`docs/`](./docs/).
+Architecture / specs / plans: [`token-oracle-mind/`](./token-oracle-mind/)
+(memory-atlas — not public `docs/`).
 
 ---
 

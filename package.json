@@ -1,0 +1,9 @@
+{
+  "name": "token-oracle-repo",
+  "private": true,
+  "description": "Repo root helper scripts only — the published Python package is pyproject.toml; the published npm shim is npm/package.json.",
+  "scripts": {
+    "docs:check": "node ../docs-kit/bin/docs-kit.mjs check docs/",
+    "docs:health": "node ../docs-kit/bin/docs-kit.mjs health docs/"
+  }
+}

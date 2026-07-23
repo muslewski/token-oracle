@@ -1,0 +1,9 @@
+{
+  "title": "token-oracle",
+  "description": "Offline token/cap forecasts for Claude Code and Grok Build",
+  "sidebar": [
+    { "title": "Home", "href": "index.md" },
+    { "title": "Getting started", "href": "getting-started.md" },
+    { "title": "Works with", "href": "works-with.md" }
+  ]
+}
