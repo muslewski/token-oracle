@@ -1,6 +1,6 @@
 {
   "name": "token-oracle",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Forecast when you'll hit your Claude Code / Grok token limits — offline from local logs, optionally browser-verified. Python CLI, runnable with npx/bunx.",
   "bin": {
     "token-oracle": "bin/cli.js",

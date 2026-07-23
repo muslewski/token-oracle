@@ -199,6 +199,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) 
 
 ## [Unreleased]
 
+
+## [0.1.3] — 2026-07-23
+
+### Added
+
+- **Public product documentation** under `docs/` (docs-kit frontmatter, sidebar `_meta.json`, `docs:check` / `docs:health`)
+- **`docs/works-with.md`** — fleet sibling map with honest interop edges
+- **Contextual fleet mentions** in feature docs where integrations are real
+- **Recollection soft-nudge** for docs health (memory-atlas `atlas-recollection` + docs-kit)
+
+See [`docs/index.md`](docs/index.md) for the documentation hub.
+
 ### Added
 - First-class `grok` source for Grok Build CLI (`~/.grok/sessions/.../updates.jsonl` totalTokens deltas)
 - Neutrality: generalized docs, examples, AGENTS.md, doctor for Claude Code + Grok Build + generic
